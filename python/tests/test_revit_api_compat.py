@@ -258,6 +258,60 @@ class TestTransactionLifecycle(unittest.TestCase):
         self.assertTrue(result.failed)
         self.assertIn("no open transaction", result.message)
 
+    def test_new_family_document_is_preferred(self):
+        doc = _TxDoc()
+        calls = []
+        api = _tx_api()
+        api.app = type(
+            "_App",
+            (),
+            {
+                "NewFamilyDocument": staticmethod(lambda path: calls.append("new") or doc),
+                "OpenDocumentFile": staticmethod(lambda path: calls.append("open") or doc),
+            },
+        )()
+        with tempfile.NamedTemporaryFile(suffix=".rft", delete=False) as handle:
+            template = handle.name
+        self.addCleanup(os.remove, template)
+        api.open_family_template(template, "out.rfa")
+        # OpenDocumentFile would hand back the template that is already open
+        self.assertEqual(calls, ["new"])
+
+    def test_falls_back_to_opening_the_file(self):
+        doc = _TxDoc()
+        calls = []
+
+        def broken(path):
+            raise RuntimeError("not supported here")
+
+        api = _tx_api()
+        api.app = type(
+            "_App",
+            (),
+            {
+                "NewFamilyDocument": staticmethod(broken),
+                "OpenDocumentFile": staticmethod(lambda path: calls.append("open") or doc),
+            },
+        )()
+        with tempfile.NamedTemporaryFile(suffix=".rft", delete=False) as handle:
+            template = handle.name
+        self.addCleanup(os.remove, template)
+        api.open_family_template(template, "out.rfa")
+        self.assertEqual(calls, ["open"])
+
+    def test_the_parameter_cache_does_not_cross_documents(self):
+        doc = _TxDoc()
+        api = _tx_api()
+        api._family_params = {"Width": _NamedParam("Width")}
+        api._spec_by_name = {"Width": SPEC_LENGTH}
+        api.app = type("_App", (), {"NewFamilyDocument": staticmethod(lambda path: doc)})()
+        with tempfile.NamedTemporaryFile(suffix=".rft", delete=False) as handle:
+            template = handle.name
+        self.addCleanup(os.remove, template)
+        api.open_family_template(template, "out.rfa")
+        self.assertEqual(api._family_params, {})
+        self.assertEqual(api._spec_by_name, {})
+
     def test_close_rolls_back_an_open_transaction(self):
         doc = _TxDoc()
         api = _tx_api()

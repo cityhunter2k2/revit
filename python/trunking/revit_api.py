@@ -223,9 +223,32 @@ class RevitApi(api.RevitAdapter):
     def open_family_template(self, template_path: str, destination: str):
         if not os.path.isfile(template_path):
             raise RuntimeError("family template not found: %s" % template_path)
-        doc = self.app.OpenDocumentFile(template_path)
+        # OpenDocumentFile returns the document that is *already open* for that
+        # path, so a leftover template document from an earlier run is reused and
+        # every "new" family accumulates the previous one's parameters.
+        # NewFamilyDocument always builds a fresh document from the template.
+        doc = None
+        try:
+            doc = self.app.NewFamilyDocument(template_path)
+        except Exception as exc:  # noqa: BLE001 - older hosts may not expose it
+            self.log("    NewFamilyDocument failed: %s: %s" % (type(exc).__name__, exc))
+        if doc is None:
+            doc = self.app.OpenDocumentFile(template_path)
         if doc is None:
             raise RuntimeError("Revit could not open %s" % template_path)
+        # FamilyParameter proxies belong to one document; carrying the previous
+        # family's cache into this one means calling Set/SetFormula with an
+        # object from another document, which does not raise, it takes Revit
+        # down.
+        self._family_params = {}
+        self._spec_by_name = {}
+        try:
+            self.log(
+                "    document %r, %d parameters before the build"
+                % (doc.Title, len(self.parameter_inventory(doc)))
+            )
+        except Exception:  # noqa: BLE001
+            pass
         # a template opens untitled; SaveAs(destination) turns it into the .rfa
         self._begin_build_transaction(doc)
         return doc
