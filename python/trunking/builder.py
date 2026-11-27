@@ -98,6 +98,11 @@ def build_family(
         created += 1
     for definition in model.params:
         if definition.formula:
+            if "formulas" in skipped_phases():
+                report.add(
+                    "set_formula", api.skipped("TRUNKING_SKIP=formulas"), definition.formula
+                )
+                continue
             report.add("set_formula", revit.set_formula(doc, definition.name, definition.formula), definition.formula)
         elif definition.default not in (None, ""):
             report.add("set_default", revit.set_value(doc, definition.name, definition.default), str(definition.default))

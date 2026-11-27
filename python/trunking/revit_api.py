@@ -33,12 +33,15 @@ from .model import SPEC_ANGLE, SPEC_LENGTH, SPEC_MATERIAL, SPEC_TEXT, SPEC_YESNO
 MM_PER_FOOT = 304.8
 
 GROUP_MAP = {
-    "Data": ("Data", "PG_DATA"),
-    "Dimensions": ("Dimensions", "PG_DIMENSIONS"),
-    "Geometry": ("Geometry", "PG_GEOMETRY"),
-    "Materials and Finishes": ("Materials", "PG_MATERIALS"),
-    "Graphics": ("Graphics", "PG_GRAPHICS"),
-    "Identity Data": ("Identity Data", "PG_IDENTITY_DATA"),
+    # model group -> (GroupTypeId candidates, BuiltInParameterGroup)
+    # Revit 2027 has no GroupTypeId.Dimensions and no "Identity Data" with a
+    # space, so the first name that exists on the running release wins.
+    "Data": (("Data",), "PG_DATA"),
+    "Dimensions": (("Dimensions", "Geometry", "Constraints"), "PG_DIMENSIONS"),
+    "Geometry": (("Geometry",), "PG_GEOMETRY"),
+    "Materials and Finishes": (("Materials",), "PG_MATERIALS"),
+    "Graphics": (("Graphics", "Display"), "PG_GRAPHICS"),
+    "Identity Data": (("IdentityData", "Data"), "PG_IDENTITY_DATA"),
 }
 
 SPEC_MAP = {
@@ -311,14 +314,21 @@ class RevitApi(api.RevitAdapter):
 
     def add_instance_parameter(self, doc, definition: ParamDef) -> CapResult:
         manager = doc.FamilyManager
-        forge_group, bip_group = GROUP_MAP.get(definition.group, ("Data", "PG_DATA"))
+        forge_names, bip_group = GROUP_MAP.get(definition.group, (("Data",), "PG_DATA"))
+        forge_group = None
+        for candidate in forge_names:
+            if getattr(self.DB.GroupTypeId, candidate, None) is not None:
+                forge_group = candidate
+                break
         _, ptype = SPEC_MAP.get(definition.spec, ("Length", "Length"))
         self._spec_by_name[definition.name] = definition.spec
-        self.log("    add %s (%s)" % (definition.name, definition.spec))
+        self.log("    add %s (%s, group %s)" % (definition.name, definition.spec, forge_group))
 
         created = []
 
         def create(name):
+            if forge_group is None:
+                raise AttributeError("no GroupTypeId for %r" % definition.group)
             parameter = manager.AddParameter(
                 name, getattr(self.DB.GroupTypeId, forge_group), self._spec_id(definition.spec), True
             )
@@ -326,11 +336,11 @@ class RevitApi(api.RevitAdapter):
             return parameter is not None
 
         def legacy():
+            group = getattr(self.DB.BuiltInParameterGroup, bip_group, None)
+            if group is None:
+                raise AttributeError("no BuiltInParameterGroup.%s" % bip_group)
             parameter = manager.AddParameter(
-                definition.name,
-                getattr(self.DB.BuiltInParameterGroup, bip_group),
-                getattr(self.DB.ParameterType, ptype),
-                True,
+                definition.name, group, getattr(self.DB.ParameterType, ptype), True
             )
             created.append(parameter)
             return parameter is not None
@@ -439,6 +449,22 @@ class RevitApi(api.RevitAdapter):
         known = set(self.parameter_inventory(doc))
         return sorted(token for token in tokens if token not in known and token not in FORMULA_WORDS)
 
+    @staticmethod
+    def _normalise_formula(formula: str) -> str:
+        """Rewrite a leading unary minus as a subtraction.
+
+        Revit's parser is happy with ``-Half_Height`` but the parenthesised form
+        ``-(Half_Width + Cover_Overhang)`` is the kind of token sequence that has
+        taken the process down; ``0 - (…)`` means the same and parses plainly.
+        """
+        text = (formula or "").strip()
+        if text.startswith("-"):
+            rest = text[1:].strip()
+            if rest.startswith("(") and rest.endswith(")"):
+                return "0 - %s" % rest
+            return "0 - (%s)" % rest
+        return text
+
     def set_formula(self, doc, name: str, formula: str) -> CapResult:
         self.log("    formula %s = %s" % (name, formula))
         param = self._param(doc, name)
@@ -446,7 +472,7 @@ class RevitApi(api.RevitAdapter):
             return api.failed(f"unknown parameter {name}")
         if not param.IsInstance:
             return api.failed(f"{name} is a type parameter - formulas may not reference instances")
-        translated = self.translated_formula(formula)
+        translated = self._normalise_formula(self.translated_formula(formula))
         if translated != formula:
             self.log(f"    formula for {name} renamed to {translated!r}")
         unknown = self._unknown_references(doc, translated)

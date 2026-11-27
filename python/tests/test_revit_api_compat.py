@@ -566,6 +566,23 @@ class TestParameterNameCollision(unittest.TestCase):
         api.DB = _DB
         return api
 
+    def test_missing_group_falls_back_to_the_next_candidate(self):
+        calls = []
+
+        class _Manager(object):
+            Parameters = []
+
+            def AddParameter(self, name, group, spec, is_instance):
+                calls.append((name, group))
+                return _NamedParam(name)
+
+        doc = type("_Doc", (), {"FamilyManager": _Manager()})()
+        api = self._api()
+        result = api.add_instance_parameter(doc, ParamDef("Width", SPEC_LENGTH, "Dimensions"))
+        self.assertTrue(result.ok, result.message)
+        # the fake DB has no GroupTypeId.Dimensions, only Geometry
+        self.assertEqual(calls[0][1], "group:geometry")
+
     def test_collision_creates_a_suffixed_twin(self):
         created = []
 
@@ -589,6 +606,17 @@ class TestParameterNameCollision(unittest.TestCase):
         self.assertIn("Width_TS", created)
         self.assertIn("Width", api._family_params)
         self.assertEqual(api.translated_formula("Width / 2"), "Width_TS / 2")
+
+
+class TestFormulaNormalising(unittest.TestCase):
+    def test_leading_minus_becomes_a_subtraction(self):
+        self.assertEqual(RevitApi._normalise_formula("-(Half_Width + Cover_Overhang)"),
+                         "0 - (Half_Width + Cover_Overhang)")
+        self.assertEqual(RevitApi._normalise_formula("-Half_Height"), "0 - (Half_Height)")
+
+    def test_ordinary_formulas_are_untouched(self):
+        self.assertEqual(RevitApi._normalise_formula("Width / 2"), "Width / 2")
+        self.assertEqual(RevitApi._normalise_formula("  Stub  "), "Stub")
 
 
 class TestNoRemovedMembers(unittest.TestCase):
