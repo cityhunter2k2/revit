@@ -18,6 +18,7 @@ converted to internal units (feet / radians) by :class:`Units`.
 
 from __future__ import annotations
 
+import glob
 import math
 import os
 from dataclasses import dataclass
@@ -734,23 +735,104 @@ class RevitApi(api.RevitAdapter):
 # --------------------------------------------------------------------------- #
 # template discovery
 # --------------------------------------------------------------------------- #
+TEMPLATE_FILENAME = "Metric Cable Tray Fitting.rft"
+
+#: Pre-2027 layout, kept for reference and for the fallback search.
 TEMPLATE_RELATIVE = os.path.join(
-    "Family Templates", "English", "Metric", "Cable Tray", "Metric Cable Tray Fitting.rft"
+    "Family Templates", "English", "Metric", "Cable Tray", TEMPLATE_FILENAME
 )
 
+#: Locales to probe, in order. ``English`` first keeps an existing install's
+#: language; zh-TW installs only ship ``Traditional Chinese`` and Simplified
+#: Chinese is ``Chinese`` in both the 2024 and 2027 template trees.
+TEMPLATE_LOCALES = (
+    "English",
+    "Traditional Chinese",
+    "Chinese",
+    "English-Imperial",
+    "Japanese",
+    "Korean",
+    "Russian",
+    "French",
+    "German",
+)
 
-def find_template(explicit: Optional[str] = None, years: Sequence[int] = (2026, 2025, 2024, 2023, 2022, 2021, 2020)) -> Optional[str]:
-    """Locate ``Metric Cable Tray Fitting.rft`` (env var, then default installs)."""
+#: Revit releases to probe, newest first.
+TEMPLATE_YEARS = (2027, 2026, 2025, 2024, 2023, 2022, 2021, 2020)
+
+
+def _template_roots(years: Sequence[int] = TEMPLATE_YEARS) -> List[str]:
+    """Template roots to probe: known releases first, then whatever is installed."""
+    roots: List[str] = []
+    for year in years:
+        for pattern in (
+            r"C:\ProgramData\Autodesk\RVT {0}",
+            r"C:\Program Files\Autodesk\Revit {0}",
+        ):
+            candidate = pattern.format(year)
+            if candidate not in roots:
+                roots.append(candidate)
+    for pattern in (r"C:\ProgramData\Autodesk\RVT *", r"C:\Program Files\Autodesk\Revit *"):
+        for found in sorted(glob.glob(pattern), reverse=True):
+            if found not in roots:
+                roots.append(found)
+    return roots
+
+
+def _locale_candidates(base: str, filename: str = TEMPLATE_FILENAME) -> List[str]:
+    """Candidate paths under one install root, flat layout before the old one.
+
+    Revit 2027 ships the template flat inside the locale folder
+    (``Family Templates\\Traditional Chinese\\Metric Cable Tray Fitting.rft``)
+    while pre-2027 keeps the category folders
+    (``Family Templates\\English\\Metric\\Cable Tray\\...``).
+    """
+    family_templates = os.path.join(base, "Family Templates")
+    candidates: List[str] = []
+    for locale in TEMPLATE_LOCALES:
+        candidates.append(os.path.join(family_templates, locale, filename))
+        candidates.append(
+            os.path.join(family_templates, locale, "Metric", "Cable Tray", filename)
+        )
+    return candidates
+
+
+def _walk_for(base: str, filename: str = TEMPLATE_FILENAME, max_depth: int = 4) -> Optional[str]:
+    """Last resort: look for the file anywhere under ``Family Templates``."""
+    family_templates = os.path.join(base, "Family Templates")
+    if not os.path.isdir(family_templates):
+        return None
+    root_depth = family_templates.rstrip("\\/").count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(family_templates):
+        if dirpath.count(os.sep) - root_depth >= max_depth:
+            dirnames[:] = []
+        if filename in filenames:
+            return os.path.join(dirpath, filename)
+    return None
+
+
+def find_template(
+    explicit: Optional[str] = None, years: Sequence[int] = TEMPLATE_YEARS
+) -> Optional[str]:
+    """Locate ``Metric Cable Tray Fitting.rft`` (env var, then default installs).
+
+    The install layout differs between releases: 2027 puts the template flat in
+    the locale folder and a zh-TW install only has ``Traditional Chinese``, so a
+    fixed path guess misses.  Order: explicit argument, ``TRUNKING_TEMPLATE``,
+    the known locale/layout combinations, then a bounded walk.
+    """
     if explicit:
         return explicit if os.path.isfile(explicit) else None
     env = os.environ.get("TRUNKING_TEMPLATE")
     if env and os.path.isfile(env):
         return env
-    for year in years:
-        for root in (r"C:\ProgramData\Autodesk\RVT {year}", r"C:\Program Files\Autodesk\Revit {year}"):
-            base = root.format(year=year)
-            for locale in ("English", "Chinese", "English-Imperial"):
-                candidate = os.path.join(base, "Family Templates", locale, "Metric", "Cable Tray", "Metric Cable Tray Fitting.rft")
-                if os.path.isfile(candidate):
-                    return candidate
+    roots = _template_roots(years)
+    for base in roots:
+        for candidate in _locale_candidates(base):
+            if os.path.isfile(candidate):
+                return candidate
+    for base in roots:
+        found = _walk_for(base)
+        if found:
+            return found
     return None

@@ -11,7 +11,15 @@
 | pyRevit | **v7.1.0**（build 26319）|
 | 預設引擎 | IronPython 2.7.12 |
 | 可用 CPython | **3.12.3** ✅ |
-| Revit | 2024 / 2025 / 2026（`find_template` 依序搜尋）|
+| Revit | 2020–2027（`find_template` 由新至舊搜尋；2027 的平鋪版面與 `Traditional Chinese` 語系已納入）|
+
+2026-11-27 在一台 **Revit 2027 + pyRevit 7.1.0.26319（zh-TW）** 的機器上補測：
+
+* `find_template()` 找到 `C:\ProgramData\Autodesk\RVT 2027\Family Templates\Traditional Chinese\Metric Cable Tray Fitting.rft`
+  （2027 是平鋪，舊版才有 `Metric\Cable Tray\` 子夾；該機的 `RVT 2025` 樣板夾是空的）
+* 用 pyRevit 內建的 `CPY3123\python.exe`（3.12.3）直接跑 `Check Setup` 的 `main()`：
+  套件 `OK`、六族模型 6 × 41 = 246 項全過、樣板與輸出夾 `OK`
+* 這一輪**沒有**在 Revit 內按 Build Families，實機建置仍需你自己跑一次確認
 
 ⚠️ 因為**預設引擎是 IronPython 2.7**，按鈕若被 IronPython 執行就只會跳說明視窗。
 請先按 **Check Setup**：它會回報實際引擎，並確認套件、模型、樣板、輸出夾是否就緒。
@@ -19,7 +27,7 @@
 若 Check Setup 顯示 IronPython：
 
 ```
-pyRevit ▸ Settings ▸ Engines ▸ Default Engine = CPython（3.12）
+pyRevit ▸ Settings ▸ Core Settings ▸ Engines ▸ Active Engine = CPython（3.12）
 ```
 
 （或保留按鈕檔頭的 `#! python3`，pyRevit 7 會用 CPython 執行該腳本。）
@@ -42,7 +50,8 @@ pyRevit ▸ Settings ▸ Engines ▸ Default Engine = CPython（3.12）
 3. 如果只能用 IronPython：改在 Revit 外用 CPython 執行 `python/build_families.py`（同一個流程、
    同樣的產出），或改用 C# Add-in（見第 6 節）。
 
-在 Revit 的 **pyRevit ▸ Settings ▸ About** 可看到版本；`pyRevit ▸ Settings ▸ Engines` 可看到目前引擎。
+在 Revit 的 **pyRevit ▸ Settings ▸ About** 可看到版本；`pyRevit ▸ Settings ▸ Core Settings ▸ Engines`
+可看到 `Active Engine`（目前引擎）與 `Active CPython Engine`（CPython 版本選擇）。
 
 ## 1. 安裝擴充套件
 
@@ -153,9 +162,9 @@ Revit 呼叫」，可以直接照抄成 C#；幾何與尺寸計畫則由 `python
 | 症狀 | 對策 |
 |---|---|
 | 按鈕灰色／不存在 | `pyRevit ▸ Reload`；確認「Custom Extension Directories」指向 repo 根目錄 |
-| 跳出「needs CPython engine」 | 見第 0 節：`Settings ▸ Engines ▸ Default Engine = CPython` |
+| 跳出「needs CPython engine」 | 見第 0 節：`Settings ▸ Core Settings ▸ Engines ▸ Active Engine = CPython` |
 | Check Setup 顯示 `Python engine : ironpython27` | 同上；本工具必須在 CPython 下執行 |
 | 跳出「Could not find the 'trunking' python package」 | 設 `TRUNKING_HOME`，或建立 `trunking_home.txt` |
-| 跳出「Metric Cable Tray Fitting.rft was not found」 | 設 `TRUNKING_TEMPLATE`；樣板在 `C:\ProgramData\Autodesk\RVT 20xx\Family Templates\<語言>\` |
+| 跳出「Metric Cable Tray Fitting.rft was not found」 | 設 `TRUNKING_TEMPLATE`；樣板在 `C:\ProgramData\Autodesk\RVT 20xx\Family Templates\<語言>\`。2027 是**平鋪**在語系夾下（例：`...\RVT 2027\Family Templates\Traditional Chinese\Metric Cable Tray Fitting.rft`），沒有 `Metric\Cable Tray` 子夾；英文安裝沒有這個檔時會自動退到繁中／簡中 |
 | 執行到一半 Revit 卡住 | 族檔較大時逐族建置較穩；先只建一個（CLI `--only mitre_front`）確認流程 |
 | 中文路徑出錯 | pyRevit CPython 對非 ASCII 路徑一般沒問題，但輸出資料夾建議用純英文路徑 |

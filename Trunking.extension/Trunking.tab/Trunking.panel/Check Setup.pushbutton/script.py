@@ -147,9 +147,9 @@ def main():
     if not python_ok:
         lines.append(
             "This engine is IronPython 2.7, so the package cannot be imported.\n"
-            "pyRevit 7 ships CPython 3.12: set\n"
-            "    pyRevit > Settings > Engines > Default Engine = CPython\n"
-            "or keep the '#! python3' header of the buttons and reload pyRevit."
+            "pyRevit 7 ships CPython 3.12: open\n"
+            "    pyRevit > Settings > Core Settings > Engines > Active Engine\n"
+            "and pick CPython 3.12, or keep the '#! python3' header of the buttons and reload pyRevit."
         )
         _alert("\n".join(lines))
         return

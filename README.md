@@ -40,7 +40,7 @@ repo 內附 pyRevit 擴充套件 `Trunking.extension`（Trunking 頁籤 → Chec
 1. `pyRevit ▸ Settings ▸ Custom Extension Directories` 指向本 repo 根目錄 → `pyRevit ▸ Reload`。
 2. **先按 Check Setup**：它回報實際引擎、套件路徑、六族模型是否全過、樣板與輸出夾。
 3. 本工具**必須在 CPython 引擎（Python 3.6+）執行**；按鈕已寫 `#! python3`。若 Check Setup 顯示
-   IronPython 2.7，改成 `pyRevit ▸ Settings ▸ Engines ▸ Default Engine = CPython`（pyRevit 7 內建 3.12）。
+   IronPython 2.7，改成 `pyRevit ▸ Settings ▸ Core Settings ▸ Engines ▸ Active Engine = CPython`（pyRevit 7 內建 3.12）。
    IronPython 下按鈕會跳說明視窗，不會報 SyntaxError。
 4. 細節、環境變數、疑難排解：[`docs/08-pyrevit.md`](docs/08-pyrevit.md)。
 
