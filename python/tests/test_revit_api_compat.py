@@ -58,6 +58,7 @@ def _api():
     instance.app = None
     instance._log = None
     instance._spec_by_name = {}
+    instance._family_params = {}
     instance._transaction = None
     instance.DB = _DB
     return instance

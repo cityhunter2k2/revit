@@ -133,6 +133,7 @@ class RevitApi(api.RevitAdapter):
         self.app = app
         self._log = log
         self._spec_by_name: Dict[str, str] = {}
+        self._family_params: Dict[str, Any] = {}
         self._transaction = None
         self._import()
 
@@ -234,20 +235,39 @@ class RevitApi(api.RevitAdapter):
         return int(doc.FamilyManager.Types.Size)
 
     def ensure_single_type(self, doc, name: str) -> CapResult:
+        """Collapse the template's types down to the one delivered type.
+
+        ``Metric Cable Tray Fitting.rft`` ships three types; the design is a
+        single flexing type, so the extras are deleted instead of refusing the
+        build.
+        """
         manager = doc.FamilyManager
-        count = int(manager.Types.Size)
-        if count != 1:
-            return api.failed(
-                f"template already holds {count} types - refusing to build a multi-type family; "
-                "delete the extra types in the template first"
-            )
-        if manager.CurrentType.Name == name:
-            return api.ok(f"single type already named {name}")
+        total = int(manager.Types.Size)
+        if total == 0:
+            return api.failed("the template holds no type at all")
+        dropped = []
+        while int(manager.Types.Size) > 1:
+            current = manager.CurrentType
+            try:
+                manager.DeleteCurrentType()
+            except Exception as exc:  # noqa: BLE001
+                return api.failed(
+                    f"could not delete type {getattr(current, 'Name', '?')}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            dropped.append(getattr(current, "Name", "?"))
+            remaining = list(manager.Types)
+            if not remaining:
+                return api.failed("deleting the extra types left no type behind")
+            manager.CurrentType = remaining[0]
         try:
-            manager.RenameCurrentType(name)
-            return api.ok(f"renamed the single type to {name}")
+            if manager.CurrentType.Name != name:
+                manager.RenameCurrentType(name)
         except Exception as exc:  # noqa: BLE001
             return api.failed(f"{type(exc).__name__}: {exc}")
+        if dropped:
+            return api.ok(f"deleted {len(dropped)} template type(s) and kept '{name}'")
+        return api.ok(f"single type already named {name}")
 
     def parameter_names(self, doc) -> Sequence[str]:
         return [p.Definition.Name for p in doc.FamilyManager.Parameters]
@@ -272,18 +292,24 @@ class RevitApi(api.RevitAdapter):
         _, ptype = SPEC_MAP.get(definition.spec, ("Length", "Length"))
         self._spec_by_name[definition.name] = definition.spec
 
+        created = []
+
         def modern():
-            return manager.AddParameter(
+            parameter = manager.AddParameter(
                 definition.name, getattr(self.DB.GroupTypeId, forge_group), self._spec_id(definition.spec), True
-            ) is not None
+            )
+            created.append(parameter)
+            return parameter is not None
 
         def legacy():
-            return manager.AddParameter(
+            parameter = manager.AddParameter(
                 definition.name,
                 getattr(self.DB.BuiltInParameterGroup, bip_group),
                 getattr(self.DB.ParameterType, ptype),
                 True,
-            ) is not None
+            )
+            created.append(parameter)
+            return parameter is not None
 
         result = _probe(
             (
@@ -294,13 +320,35 @@ class RevitApi(api.RevitAdapter):
         )
         if result.failed:
             return api.failed(f"could not create {definition.name}: {result.message}")
+        # Keep the object Revit handed back: looking the parameter up again by
+        # Definition.Name is what turned "Width" into "unknown parameter" once
+        # the template already owned a parameter of that name.
+        if created and created[-1] is not None:
+            self._family_params[definition.name] = created[-1]
         return api.ok(f"instance {definition.spec}")
 
     def _param(self, doc, name: str):
+        cached = self._family_params.get(name)
+        if cached is not None:
+            return cached
         for param in doc.FamilyManager.Parameters:
             if param.Definition.Name == name:
                 return param
+        self.log(
+            "    parameter %r not found; the family holds: %s"
+            % (name, ", ".join(self.parameter_inventory(doc)))
+        )
         return None
+
+    def parameter_inventory(self, doc) -> Sequence[str]:
+        """Names Revit actually holds, for when a lookup went wrong."""
+        names = []
+        for param in doc.FamilyManager.Parameters:
+            try:
+                names.append(str(param.Definition.Name))
+            except Exception:  # noqa: BLE001
+                names.append("<no name>")
+        return names
 
     def set_formula(self, doc, name: str, formula: str) -> CapResult:
         param = self._param(doc, name)
@@ -319,6 +367,9 @@ class RevitApi(api.RevitAdapter):
         if param is None:
             return api.failed(f"unknown parameter {name}")
         spec = self._spec_by_name.get(name, SPEC_LENGTH)
+        if spec == SPEC_MATERIAL:
+            # a material parameter stores an element id, not the material name
+            return api.skipped("material parameter is set from the element material")
         try:
             if isinstance(value, bool):
                 doc.FamilyManager.Set(param, 1 if value else 0)
@@ -421,9 +472,13 @@ class RevitApi(api.RevitAdapter):
         return api.ok(result.message)
 
     # -- geometry ---------------------------------------------------------- #
+    def _internal(self, point):
+        """Millimetres (the family model's unit) to Revit internal units."""
+        return tuple(self.units.length_to_internal(float(component)) for component in point)
+
     def _sketch_plane(self, doc, frame):
         plane = self.Plane.CreateByOriginAndBasis(
-            self.XYZ(*frame.origin), self.XYZ(*frame.ex), self.XYZ(*frame.ey)
+            self.XYZ(*self._internal(frame.origin)), self.XYZ(*frame.ex), self.XYZ(*frame.ey)
         )
         return self.DB.SketchPlane.Create(doc, plane)
 
@@ -436,8 +491,8 @@ class RevitApi(api.RevitAdapter):
             for index in range(count):
                 u1, v1 = loop[index]
                 u2, v2 = loop[(index + 1) % count]
-                p1 = self.XYZ(*frame.to_world(u1, v1, 0.0))
-                p2 = self.XYZ(*frame.to_world(u2, v2, 0.0))
+                p1 = self.XYZ(*self._internal(frame.to_world(u1, v1, 0.0)))
+                p2 = self.XYZ(*self._internal(frame.to_world(u2, v2, 0.0)))
                 curve_array.Append(self.Line.CreateBound(p1, p2))
             profile.Append(curve_array)
         sketch_plane = self._sketch_plane(doc, frame)
@@ -617,8 +672,8 @@ class RevitApi(api.RevitAdapter):
             refs = self.DB.ReferenceArray()
             refs.Append(ref_a)
             refs.Append(ref_b)
-            p_ref = self.XYZ(*request.ref_mid)
-            p_target = self.XYZ(*request.target_mid)
+            p_ref = self.XYZ(*self._internal(request.ref_mid))
+            p_target = self.XYZ(*self._internal(request.target_mid))
             if (p_target - p_ref).GetLength() < 1e-6:
                 raise RuntimeError("degenerate dimension line")
             line = self.Line.CreateBound(p_ref, p_target)
@@ -724,7 +779,7 @@ class RevitApi(api.RevitAdapter):
         origin = tuple(float(expr.evaluate(c, values)) for c in connector_def.origin)
         width_int = self.units.length_to_internal(float(values["Width"]))
         height_int = self.units.length_to_internal(float(values["Height"]))
-        plane_origin = self.XYZ(*origin)
+        plane_origin = self.XYZ(*self._internal(origin))
         plane = self.Plane.CreateByOriginAndBasis(
             plane_origin, self.XYZ(*connector_def.basis_x), self.XYZ(*connector_def.basis_y)
         )
@@ -855,7 +910,8 @@ class RevitApi(api.RevitAdapter):
             points = [tuple(float(expr.evaluate(c, values)) for c in p) for p in symbol_def.points]
             for a, b in zip(points[:-1], points[1:]):
                 doc.FamilyCreate.NewSymbolicCurve(
-                    self.Line.CreateBound(self.XYZ(*a), self.XYZ(*b)), sketch_plane
+                    self.Line.CreateBound(self.XYZ(*self._internal(a)), self.XYZ(*self._internal(b))),
+                    sketch_plane,
                 )
             return api.ok(f"{len(points) - 1} segments")
         except Exception as exc:  # noqa: BLE001
