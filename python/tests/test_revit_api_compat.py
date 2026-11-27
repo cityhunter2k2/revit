@@ -192,11 +192,28 @@ class _TxDoc(object):
         self.events.append("close")
 
 
+class _FailureOptions(object):
+    def __init__(self):
+        self.forced_modal = None
+        self.clear_after_rollback = None
+        self.processor = None
+
+    def SetForcedModalHandling(self, value):
+        self.forced_modal = value
+
+    def SetClearAfterRollback(self, value):
+        self.clear_after_rollback = value
+
+    def SetFailuresPreprocessor(self, processor):
+        self.processor = processor
+
+
 class _Transaction(object):
     def __init__(self, doc, name):
         self.doc = doc
         self.name = name
         self.committed = False
+        self.applied = None
 
     def Start(self):
         self.doc.events.append("start")
@@ -210,6 +227,13 @@ class _Transaction(object):
 
     def GetStatus(self):
         return "committed"
+
+    def GetFailureHandlingOptions(self):
+        self.options = _FailureOptions()
+        return self.options
+
+    def SetFailureHandlingOptions(self, options):
+        self.applied = options
 
 
 class _SaveAsOptions(object):
@@ -311,6 +335,23 @@ class TestTransactionLifecycle(unittest.TestCase):
         api.open_family_template(template, "out.rfa")
         self.assertEqual(api._family_params, {})
         self.assertEqual(api._spec_by_name, {})
+
+    def test_commit_disables_the_modal_dialog(self):
+        doc = _TxDoc()
+        api = _tx_api()
+        api._begin_build_transaction(doc)
+        transaction = api._transaction
+        result = api.save_family(doc, "out.rfa")
+        self.assertTrue(result.ok, result.message)
+        self.assertIs(transaction.applied.forced_modal, False)
+        self.assertIs(transaction.applied.clear_after_rollback, True)
+
+    def test_commit_works_without_the_failure_interface(self):
+        doc = _TxDoc()
+        api = _tx_api()
+        self.assertIsNone(api._failure_processor(doc))
+        api._begin_build_transaction(doc)
+        self.assertTrue(api.save_family(doc, "out.rfa").ok)
 
     def test_close_rolls_back_an_open_transaction(self):
         doc = _TxDoc()

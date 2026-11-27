@@ -211,14 +211,82 @@ class RevitApi(api.RevitAdapter):
         self._transaction = None
         if transaction is None:
             return api.failed("no open transaction - the build modified nothing")
+        # A commit with errors opens a modal dialog and the script blocks behind
+        # it: no dialog for an automated build, the status has to tell us.
+        try:
+            options = transaction.GetFailureHandlingOptions()
+            options.SetForcedModalHandling(False)
+            options.SetClearAfterRollback(True)
+            processor = self._failure_processor(doc)
+            if processor is not None:
+                options.SetFailuresPreprocessor(processor)
+            transaction.SetFailureHandlingOptions(options)
+        except Exception as exc:  # noqa: BLE001
+            self.log("    failure handling options unavailable: %s" % exc)
         try:
             transaction.Commit()
         except Exception as exc:  # noqa: BLE001
+            self._log_warnings(doc)
             return api.failed(f"transaction commit: {type(exc).__name__}: {exc}")
         status = transaction.GetStatus()
         if status != self.DB.TransactionStatus.Committed:
+            self._log_warnings(doc)
             return api.failed(f"transaction status {status}")
         return api.ok("transaction committed")
+
+    def _failure_processor(self, doc):
+        """Delete the elements a commit error points at instead of stopping.
+
+        The dialog Revit shows for an unbuildable extrusion ("拉伸 ... 错误(必须
+        解决才能继续)") blocks the script: nothing can be reported until a human
+        clicks. This resolves it the way the dialog's 删除图元 button would.
+        """
+        db = self.DB
+        try:
+            interface = db.IFailuresPreprocessor
+        except Exception:  # noqa: BLE001
+            return None
+        logger = self.log
+
+        try:
+
+            class _DeleteFailing(interface):
+                def PreprocessFailures(self, failures):
+                    ids = []
+                    try:
+                        for failure in failures:
+                            for element_id in failure.GetFailingElements():
+                                ids.append(element_id)
+                    except Exception:  # noqa: BLE001
+                        return db.FailureProcessingResult.Continue
+                    for element_id in ids:
+                        try:
+                            doc.Delete(element_id)
+                        except Exception as exc:  # noqa: BLE001
+                            logger("    could not delete a failing element: %s" % exc)
+                    if ids:
+                        logger("    commit error: deleted %d failing element(s)" % len(ids))
+                    return db.FailureProcessingResult.Continue
+
+            return _DeleteFailing()
+        except Exception as exc:  # noqa: BLE001
+            self.log("    failure preprocessor unavailable: %s" % exc)
+            return None
+
+    def _log_warnings(self, doc) -> None:
+        """Write the document's warnings into the progress log."""
+        try:
+            warnings = list(doc.GetWarnings())
+        except Exception:  # noqa: BLE001
+            return
+        self.log("    %d warning(s) in the document" % len(warnings))
+        for warning in warnings[:8]:
+            text = ""
+            try:
+                text = warning.GetDescriptionText()
+            except Exception:  # noqa: BLE001
+                text = str(getattr(warning, "Description", warning))
+            self.log("      warning: %s" % text)
 
     def open_family_template(self, template_path: str, destination: str):
         if not os.path.isfile(template_path):
