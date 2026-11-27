@@ -269,6 +269,103 @@ class TestTransactionLifecycle(unittest.TestCase):
         self.assertEqual(doc.events, ["close"])
 
 
+class _Material(object):
+    def __init__(self, name, element_id):
+        self.Name = name
+        self.Id = element_id
+
+
+class _SetParam(object):
+    def __init__(self):
+        self.values = []
+
+    def Set(self, value):
+        self.values.append(value)
+
+
+class TestMaterialHandling(unittest.TestCase):
+    """Material.Create returns the id of the new material, not the material."""
+
+    def _doc(self, material=None):
+        class _Doc(object):
+            def __init__(self):
+                self.by_id = {42: material} if material is not None else {}
+
+            def GetElement(self, element_id):
+                return self.by_id.get(getattr(element_id, "Value", element_id))
+
+        return _Doc()
+
+    def _api(self, existing=()):
+        class _Collector(object):
+            def __init__(self, doc):
+                pass
+
+            def OfClass(self, klass):
+                return list(existing)
+
+        class _MaterialFactory(object):
+            @staticmethod
+            def Create(doc, name):
+                return _ValueId(42)
+
+        class _BuiltInParameter(object):
+            MATERIAL_ID_PARAM = "material"
+
+        class _DB(object):
+            FilteredElementCollector = _Collector
+            Material = _MaterialFactory
+            BuiltInParameter = _BuiltInParameter
+
+        instance = _api()
+        instance.DB = _DB
+        instance._param = lambda doc, name: None
+        return instance
+
+    def test_create_is_resolved_to_a_material(self):
+        material = _Material("Galvanised Steel", _ValueId(42))
+        api = self._api()
+        resolved = api.ensure_material(self._doc(material), "Galvanised Steel")
+        self.assertIs(resolved, material)
+
+    def test_existing_material_is_reused(self):
+        material = _Material("Galvanised Steel", _ValueId(42))
+        api = self._api(existing=[material])
+        self.assertIs(api.ensure_material(self._doc(), "Galvanised Steel"), material)
+
+    def test_set_accepts_a_material(self):
+        class _Element(object):
+            def __init__(self):
+                self.parameter = _SetParam()
+
+            def get_Parameter(self, bip):
+                return self.parameter
+
+        element = _Element()
+        material = _Material("Galvanised Steel", _ValueId(42))
+        result = self._api().set_element_material(self._doc(), element, "Material", material)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual([v.Value for v in element.parameter.values], [42])
+        self.assertIn("Galvanised Steel", result.message)
+
+    def test_set_accepts_an_element_id(self):
+        class _Element(object):
+            def __init__(self):
+                self.parameter = _SetParam()
+
+            def get_Parameter(self, bip):
+                return self.parameter
+
+        element = _Element()
+        material = _Material("Galvanised Steel", _ValueId(42))
+        result = self._api().set_element_material(
+            self._doc(material), element, "Material", _ValueId(42)
+        )
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual([v.Value for v in element.parameter.values], [42])
+        self.assertIn("Galvanised Steel", result.message)
+
+
 class TestNoRemovedMembers(unittest.TestCase):
     def test_sources_do_not_use_element_id_integer_value(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

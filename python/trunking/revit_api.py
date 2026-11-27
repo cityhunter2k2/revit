@@ -65,6 +65,26 @@ def element_id_value(element_id: Any) -> int:
     )
 
 
+def element_id_of(value: Any):
+    """ElementId of an element/material, or the value itself when it is an id."""
+    inner = getattr(value, "Id", None)
+    return inner if inner is not None else value
+
+
+def _material_name(doc, material) -> str:
+    """Display name of a material that may be given as an ElementId."""
+    name = getattr(material, "Name", None)
+    if name:
+        return str(name)
+    try:
+        resolved = doc.GetElement(material)
+    except Exception:  # noqa: BLE001
+        resolved = None
+    if resolved is not None and getattr(resolved, "Name", None):
+        return str(resolved.Name)
+    return "material"
+
+
 def _probe(attempts: Sequence[Tuple[str, Any]], log=None) -> CapResult:
     """Run candidate API paths in order; return the first that succeeds."""
     errors: List[str] = []
@@ -330,10 +350,19 @@ class RevitApi(api.RevitAdapter):
             if material.Name == name:
                 return material
         try:
-            return self.DB.Material.Create(doc, name)
+            created = self.DB.Material.Create(doc, name)
         except Exception:  # noqa: BLE001
             self.log(f"    could not create material {name}")
             return None
+        # Material.Create returns the *identifier* of the new material, not the
+        # material: resolve it so callers can use .Id and .Name.
+        if getattr(created, "Name", None) is not None:
+            return created
+        try:
+            resolved = doc.GetElement(created)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        return resolved if resolved is not None else created
 
     def ensure_cable_tray_fitting_category(self, doc) -> CapResult:
         try:
@@ -677,17 +706,18 @@ class RevitApi(api.RevitAdapter):
         if element_param is None:
             return api.fallback("element material parameter missing")
         try:
-            element_param.Set(material.Id)
+            element_param.Set(element_id_of(material))
         except Exception as exc:  # noqa: BLE001
             self.log(f"    material set failed: {exc}")
+        name = _material_name(doc, material)
         family_param = self._param(doc, material_param)
         if family_param is not None:
             try:
                 doc.FamilyManager.AssociateElementParameterToFamilyParameter(element_param, family_param)
-                return api.ok(f"{material.Name} bound to {material_param}")
+                return api.ok(f"{name} bound to {material_param}")
             except Exception:  # noqa: BLE001
                 pass
-        return api.ok(f"{material.Name} (fixed)")
+        return api.ok(f"{name} (fixed)")
 
     # -- connectors -------------------------------------------------------- #
     def create_cable_tray_connector(self, doc, connector_def, values, host_element):
