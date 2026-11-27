@@ -34,6 +34,7 @@ from trunking.report import (  # noqa: E402
     flex_matrix,
     manual_labelling_markdown,
 )
+from trunking.revit_api import element_id_value  # noqa: E402
 from trunking.spec import FAMILY_KINDS, FLEX_SIZES, KIND_BY_KEY  # noqa: E402
 from trunking.verify import verify_family  # noqa: E402
 
@@ -219,7 +220,7 @@ def _measure_doc(doc, api) -> Dict[str, Dict[str, object]]:
                     )
         minimum = tuple(min(c[i] for c in corners) for i in range(3))
         maximum = tuple(max(c[i] for c in corners) for i in range(3))
-        out[element.Name or element.Id.IntegerValue.__str__()] = {
+        out[element.Name or str(element_id_value(element.Id))] = {
             "min": minimum,
             "max": maximum,
             "volume": solid.Volume * (304.8 ** 3),

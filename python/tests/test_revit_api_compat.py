@@ -1,0 +1,201 @@
+"""Revit API shapes that only bite on a live release.
+
+The first real Revit 2027 build died at the very first capability step because
+``ElementId.IntegerValue`` no longer exists (``ElementId.Value`` replaced it in
+2024). These tests drive the real method with a 2027-shaped document, so the
+regression is caught without Revit.
+"""
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from trunking.revit_api import RevitApi, element_id_value  # noqa: E402
+
+CATEGORY_ID = -2001000
+
+
+class _ValueId(object):
+    """Revit 2024+ ElementId."""
+
+    def __init__(self, value):
+        self.Value = value
+
+
+class _LegacyId(object):
+    """Pre-2024 ElementId, still accepted for older installs."""
+
+    def __init__(self, value):
+        self.IntegerValue = value
+
+
+class _OpaqueId(object):
+    pass
+
+
+class _Category(object):
+    def __init__(self, element_id, name="Cable Tray Fittings"):
+        self.Id = element_id
+        self.Name = name
+
+
+class _Doc(object):
+    def __init__(self, category):
+        self.OwnerFamily = type("_OwnerFamily", (), {"FamilyCategory": category})()
+
+
+class _DB(object):
+    class BuiltInCategory(object):
+        OST_CableTrayFitting = CATEGORY_ID
+
+
+def _api():
+    """A RevitApi without its constructor, which loads the Revit assemblies."""
+    instance = RevitApi.__new__(RevitApi)
+    instance.app = None
+    instance._log = None
+    instance._spec_by_name = {}
+    instance.DB = _DB
+    return instance
+
+
+class TestElementIdValue(unittest.TestCase):
+    def test_reads_value(self):
+        self.assertEqual(element_id_value(_ValueId(CATEGORY_ID)), CATEGORY_ID)
+
+    def test_reads_the_legacy_integer_value(self):
+        self.assertEqual(element_id_value(_LegacyId(CATEGORY_ID)), CATEGORY_ID)
+
+    def test_large_int64_ids_survive(self):
+        self.assertEqual(element_id_value(_ValueId(2 ** 40)), 2 ** 40)
+
+    def test_refuses_an_unknown_shape(self):
+        with self.assertRaises(AttributeError):
+            element_id_value(_OpaqueId())
+
+
+class TestCableTrayFittingCategory(unittest.TestCase):
+    def test_accepts_the_2027_element_id(self):
+        result = _api().ensure_cable_tray_fitting_category(_Doc(_Category(_ValueId(CATEGORY_ID))))
+        self.assertTrue(result.ok, result.message)
+
+    def test_accepts_the_legacy_element_id(self):
+        result = _api().ensure_cable_tray_fitting_category(_Doc(_Category(_LegacyId(CATEGORY_ID))))
+        self.assertTrue(result.ok, result.message)
+
+    def test_reports_a_wrong_category(self):
+        result = _api().ensure_cable_tray_fitting_category(
+            _Doc(_Category(_ValueId(CATEGORY_ID + 1), "Generic Models"))
+        )
+        self.assertTrue(result.failed)
+        self.assertIn("Generic Models", result.message)
+
+    def test_missing_category_is_a_failure(self):
+        result = _api().ensure_cable_tray_fitting_category(_Doc(None))
+        self.assertTrue(result.failed)
+        self.assertIn("no category", result.message)
+
+    def test_unknown_element_id_is_a_failure_not_a_crash(self):
+        result = _api().ensure_cable_tray_fitting_category(_Doc(_Category(_OpaqueId())))
+        self.assertTrue(result.failed)
+        self.assertIn("AttributeError", result.message)
+
+
+class TestConnectorSizeBinding(unittest.TestCase):
+    """2027 has no width/height overload; the size only follows the association."""
+
+    def _doc(self):
+        class _Manager(object):
+            def __init__(self):
+                self.associations = []
+
+            def AssociateElementParameterToFamilyParameter(self, element_parameter, family_parameter):
+                self.associations.append((element_parameter, family_parameter))
+
+        class _FamilyDoc(object):
+            def __init__(self):
+                self.FamilyManager = _Manager()
+
+        return _FamilyDoc()
+
+    def _connector(self, available):
+        class _Connector(object):
+            def get_Parameter(self, bip):
+                return "element-param:" + bip if bip in available else None
+
+        return _Connector()
+
+    def _api(self, parameter_names, bip_names):
+        instance = _api()
+        instance.DB = type("_DB", (), {"BuiltInParameter": type("_Bip", (), bip_names)})
+        instance._param = lambda doc, name: parameter_names.get(name)
+        return instance
+
+    def test_binds_both_axes_with_the_2027_names(self):
+        api = self._api(
+            {"Width": "fam-width", "Height": "fam-height"},
+            {"CONNECTOR_WIDTH": "cw", "CONNECTOR_HEIGHT": "ch"},
+        )
+        doc = self._doc()
+        result = api.bind_connector_size(doc, self._connector({"cw", "ch"}), "Width", "Height")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(len(doc.FamilyManager.associations), 2)
+
+    def test_accepts_the_legacy_rbs_names(self):
+        api = self._api(
+            {"Width": "fam-width", "Height": "fam-height"},
+            {"RBS_CONNECTOR_WIDTH": "cw", "RBS_CONNECTOR_HEIGHT": "ch"},
+        )
+        doc = self._doc()
+        result = api.bind_connector_size(doc, self._connector({"cw", "ch"}), "Width", "Height")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(len(doc.FamilyManager.associations), 2)
+
+    def test_reports_a_missing_family_parameter(self):
+        api = self._api(
+            {"Width": "fam-width"},
+            {"CONNECTOR_WIDTH": "cw", "CONNECTOR_HEIGHT": "ch"},
+        )
+        result = api.bind_connector_size(self._doc(), self._connector({"cw", "ch"}), "Width", "Height")
+        self.assertEqual(result.status, "FALLBACK", result.message)
+        self.assertIn("Height", result.message)
+
+    def test_fails_when_no_axis_can_be_bound(self):
+        api = self._api({}, {"CONNECTOR_WIDTH": "cw", "CONNECTOR_HEIGHT": "ch"})
+        result = api.bind_connector_size(self._doc(), self._connector({"cw", "ch"}), "Width", "Height")
+        self.assertTrue(result.failed, result.message)
+
+    def test_partial_binding_is_a_fallback(self):
+        api = self._api(
+            {"Width": "fam-width", "Height": "fam-height"},
+            {"CONNECTOR_WIDTH": "cw", "CONNECTOR_HEIGHT": "ch"},
+        )
+        # Height missing on the connector element: the build must keep going.
+        result = api.bind_connector_size(self._doc(), self._connector({"cw"}), "Width", "Height")
+        self.assertEqual(result.status, "FALLBACK", result.message)
+
+
+class TestNoRemovedMembers(unittest.TestCase):
+    def test_sources_do_not_use_element_id_integer_value(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for folder, dirs, files in os.walk(root):
+            # Tests name removed members on purpose, so only production code counts.
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", "tests")]
+            for filename in files:
+                if not filename.endswith(".py"):
+                    continue
+                path = os.path.join(folder, filename)
+                with open(path, encoding="utf-8") as handle:
+                    source = handle.read()
+                self.assertNotIn(
+                    ".Id.IntegerValue",
+                    source,
+                    "%s still reads ElementId.IntegerValue, removed in Revit 2027"
+                    % os.path.relpath(path, root),
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

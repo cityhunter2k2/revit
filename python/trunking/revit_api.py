@@ -49,6 +49,22 @@ SPEC_MAP = {
 }
 
 
+def element_id_value(element_id: Any) -> int:
+    """Integer value of an ``ElementId`` on this Revit release.
+
+    Revit 2027 removed ``ElementId.IntegerValue``; ``ElementId.Value`` (Int64)
+    replaced it in 2024 and is the only member left now. Everything here compares
+    ids against ``int(BuiltInCategory.…)``, so the number is what matters.
+    """
+    for attribute in ("Value", "IntegerValue"):
+        value = getattr(element_id, attribute, None)
+        if value is not None:
+            return int(value)
+    raise AttributeError(
+        "ElementId exposes neither 'Value' nor 'IntegerValue' on this Revit release"
+    )
+
+
 def _probe(attempts: Sequence[Tuple[str, Any]], log=None) -> CapResult:
     """Run candidate API paths in order; return the first that succeeds."""
     errors: List[str] = []
@@ -277,16 +293,19 @@ class RevitApi(api.RevitAdapter):
             return None
 
     def ensure_cable_tray_fitting_category(self, doc) -> CapResult:
-        category = doc.OwnerFamily.FamilyCategory
-        if category is None:
-            return api.failed("family has no category")
-        expected = int(self.DB.BuiltInCategory.OST_CableTrayFitting)
-        if int(category.Id.IntegerValue) != expected:
-            return api.failed(
-                f"family category is {category.Name}, expected Cable Tray Fitting - "
-                "re-run from 'Metric Cable Tray Fitting.rft'"
-            )
-        return api.ok("OST_CableTrayFitting")
+        try:
+            category = doc.OwnerFamily.FamilyCategory
+            if category is None:
+                return api.failed("family has no category")
+            expected = int(self.DB.BuiltInCategory.OST_CableTrayFitting)
+            if element_id_value(category.Id) != expected:
+                return api.failed(
+                    f"family category is {category.Name}, expected Cable Tray Fitting - "
+                    "re-run from 'Metric Cable Tray Fitting.rft'"
+                )
+            return api.ok("OST_CableTrayFitting")
+        except Exception as exc:  # noqa: BLE001 - a capability must not kill the build
+            return api.failed(f"{type(exc).__name__}: {exc}")
 
     def set_part_type(self, doc, part_type: str = "Elbow") -> CapResult:
         owner = doc.OwnerFamily
@@ -652,6 +671,21 @@ class RevitApi(api.RevitAdapter):
                 lambda: self.DB.ConnectorElement.CreateCableTrayConnector(doc, plane, width_int, height_int),
             )
         )
+        # Revit 2027 only keeps the reference overloads: the size comes from
+        # bind_connector_size() afterwards (builder step 6b).
+        if face_ref is not None:
+            attempts.append(
+                (
+                    "CreateCableTrayConnector(face) - 2027 overload",
+                    lambda: self.DB.ConnectorElement.CreateCableTrayConnector(doc, face_ref),
+                )
+            )
+        attempts.append(
+            (
+                "CreateCableTrayConnector(plane) - 2027 overload",
+                lambda: self.DB.ConnectorElement.CreateCableTrayConnector(doc, plane),
+            )
+        )
         for label, call in attempts:
             try:
                 connector = call()
@@ -685,26 +719,49 @@ class RevitApi(api.RevitAdapter):
             return None
 
     def bind_connector_size(self, doc, connector, width_param: str, height_param: str) -> CapResult:
+        """Bind the connector width/height to the family parameters.
+
+        Revit 2027 dropped the width/height overloads of
+        ``CreateCableTrayConnector``, so the size can only follow the family
+        through this association. The parameter names also moved: the assembly
+        only carries ``CONNECTOR_WIDTH``/``CONNECTOR_HEIGHT`` now, the ``RBS_*``
+        spellings are kept for older releases.
+        """
         manager = doc.FamilyManager
-        attempts = []
-        for bip_name, param_name in (
-            ("RBS_CABLETRAYCONNECTOR_WIDTH", width_param),
-            ("RBS_CABLETRAYCONNECTOR_HEIGHT", height_param),
-        ):
-            bip = getattr(self.DB.BuiltInParameter, bip_name, None)
-            if bip is None:
-                return api.fallback(f"{bip_name} not exposed")
-            element_param = connector.get_Parameter(bip)
-            family_param = self._param(doc, param_name)
-            if element_param is None or family_param is None:
-                return api.fallback(f"{bip_name}: parameter missing")
-
-            def bind(element_param=element_param, family_param=family_param):
-                manager.AssociateElementParameterToFamilyParameter(element_param, family_param)
-                return True
-
-            attempts.append((bip_name, bind))
-        return _probe(attempts, log=self.log)
+        bound = []
+        missing = []
+        axes = (
+            ("CONNECTOR_WIDTH", "RBS_CONNECTOR_WIDTH", "RBS_CABLETRAYCONNECTOR_WIDTH"),
+            ("CONNECTOR_HEIGHT", "RBS_CONNECTOR_HEIGHT", "RBS_CABLETRAYCONNECTOR_HEIGHT"),
+        )
+        for candidates, family_name in zip(axes, (width_param, height_param)):
+            family_parameter = self._param(doc, family_name)
+            if family_parameter is None:
+                missing.append("%s (family parameter)" % family_name)
+                continue
+            element_parameter = None
+            used = ""
+            for candidate in candidates:
+                bip = getattr(self.DB.BuiltInParameter, candidate, None)
+                if bip is None:
+                    continue
+                element_parameter = connector.get_Parameter(bip)
+                if element_parameter is not None:
+                    used = candidate
+                    break
+            if element_parameter is None:
+                missing.append("%s (connector parameter)" % candidates[0])
+                continue
+            try:
+                manager.AssociateElementParameterToFamilyParameter(element_parameter, family_parameter)
+                bound.append(used)
+            except Exception as exc:  # noqa: BLE001
+                missing.append("%s: %s: %s" % (used, type(exc).__name__, exc))
+        if bound and not missing:
+            return api.ok("bound " + ", ".join(bound))
+        if bound:
+            return api.fallback("bound %s; failed %s" % (", ".join(bound), ", ".join(missing)))
+        return api.failed("no connector size bound: " + "; ".join(missing))
 
     def link_connectors(self, doc, first, second) -> CapResult:
         try:
