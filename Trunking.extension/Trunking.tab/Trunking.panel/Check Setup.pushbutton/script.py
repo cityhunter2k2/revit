@@ -32,28 +32,120 @@ def _alert(message, title=TITLE):
         pass
 
 
-def _engine_name():
-    try:
-        from pyrevit import script
+def _interpreter_name():
+    """Name the running interpreter without asking pyRevit (always available)."""
+    major, minor, micro = sys.version_info[0], sys.version_info[1], sys.version_info[2]
+    if major == 2:
+        return "ironpython 2.7"
+    implementation = getattr(sys, "implementation", None)
+    name = getattr(implementation, "name", "")
+    if not name:
+        name = "ironpython" if sys.platform == "cli" else "cpython"
+    return "%s %d.%d.%d" % (name, major, minor, micro)
 
-        return str(script.get_engine())
+
+def _pyrevit_engine_label():
+    """Engine label pyRevit records for this session, e.g. CPY3123.
+
+    ``pyrevit.engine`` reads it from the PyRevitLoader assembly, so this is empty
+    outside a pyRevit session (RevitPythonShell, plain CPython, unit tests).
+    """
+    try:
+        from pyrevit import engine
+
+        prefix = str(getattr(engine, "EnginePrefix", "") or "").strip()
+        version = str(getattr(engine, "EngineVersion", "") or "").strip()
+        if not version.strip("0"):
+            version = ""
+        label = (prefix + version).strip()
+        if label:
+            return label
     except Exception:
-        return "unknown"
+        pass
+    return ""
+
+
+def _engine_name():
+    label = _pyrevit_engine_label()
+    interpreter = _interpreter_name()
+    if label:
+        return "%s (%s)" % (label, interpreter)
+    return interpreter
+
+
+def _formatted_version(provider):
+    """Format a pyRevit version provider, which has no usable ``__str__``."""
+    formatter = getattr(provider, "get_formatted", None)
+    if callable(formatter):
+        try:
+            text = str(formatter()).strip()
+        except Exception:
+            text = ""
+        if text:
+            return text
+    return ""
+
+
+def _version_from_library():
+    """Last resort: read ``pyrevit/version`` from the lib dir already on sys.path."""
+    for entry in sys.path:
+        if not entry:
+            continue
+        candidate = os.path.join(entry, "pyrevit", "version")
+        if os.path.isfile(candidate):
+            try:
+                handle = open(candidate)
+                try:
+                    return handle.read().strip()
+                finally:
+                    handle.close()
+            except Exception:
+                return ""
+    return ""
 
 
 def _pyrevit_version():
-    try:
-        from pyrevit import version
+    """pyRevit version.
 
-        return str(version.get_pyrevit_version())
+    pyRevit 7 exposes it as ``pyrevit.script.get_pyrevit_version()`` (there is no
+    ``pyrevit.version`` module); older releases only had ``pyrevit.versionmgr``.
+    Both need the .NET bridge, so the version file on sys.path is the last resort.
+    """
+    try:
+        from pyrevit import script
+
+        text = _formatted_version(script.get_pyrevit_version())
+        if text:
+            return text
+    except Exception:
+        pass
+    try:
+        from pyrevit.versionmgr import get_pyrevit_version
+
+        text = _formatted_version(get_pyrevit_version())
+        if text:
+            return text
     except Exception:
         pass
     try:
         import pyrevit
 
-        return str(getattr(pyrevit, "__version__", "unknown"))
+        parts = [
+            str(getattr(pyrevit, "VERSION_MAJOR", "")),
+            str(getattr(pyrevit, "VERSION_MINOR", "")),
+            str(getattr(pyrevit, "VERSION_PATCH", "")),
+        ]
+        if all(parts):
+            metadata = str(getattr(pyrevit, "BUILD_METADATA", "") or "")
+            if metadata:
+                parts.append(metadata)
+            return ".".join(parts)
     except Exception:
-        return "unknown"
+        pass
+    text = _version_from_library()
+    if text:
+        return text
+    return "unknown"
 
 
 def _revit_version():

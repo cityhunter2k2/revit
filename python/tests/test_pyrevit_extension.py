@@ -5,7 +5,9 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXT = os.path.join(ROOT, "Trunking.extension")
@@ -105,6 +107,99 @@ class TestButtonBootstrap(unittest.TestCase):
         self.assertIn("A.rfa", text)
         self.assertIn("FAILED", text)
         self.assertIn("fallback=1", text)
+
+
+class TestCheckSetupProbes(unittest.TestCase):
+    """The probes must survive a pyRevit API that keeps changing.
+
+    pyRevit 7 has ``pyrevit.script.get_pyrevit_version()`` and
+    ``pyrevit.engine``, but no ``pyrevit.version`` module and no
+    ``script.get_engine()``; the first version of this button asked for both and
+    printed "unknown" inside a perfectly healthy Revit session.
+    """
+
+    def test_engine_reports_the_interpreter_without_pyrevit(self):
+        module = load_button("Check Setup")
+        with mock.patch.dict(sys.modules, {"pyrevit": None, "pyrevit.engine": None}):
+            name = module._engine_name()
+        self.assertTrue(name.startswith("cpython"), name)
+        self.assertNotIn("unknown", name)
+
+    def test_engine_label_comes_from_pyrevit_engine(self):
+        module = load_button("Check Setup")
+        fake_engine = types.ModuleType("pyrevit.engine")
+        fake_engine.EnginePrefix = "CPY"
+        fake_engine.EngineVersion = "3123"
+        fake_pkg = types.ModuleType("pyrevit")
+        fake_pkg.engine = fake_engine
+        with mock.patch.dict(
+            sys.modules, {"pyrevit": fake_pkg, "pyrevit.engine": fake_engine}
+        ):
+            name = module._engine_name()
+        self.assertTrue(name.startswith("CPY3123"), name)
+        self.assertIn("cpython", name)
+
+    def test_engine_label_ignores_the_unloaded_zero_version(self):
+        module = load_button("Check Setup")
+        fake_engine = types.ModuleType("pyrevit.engine")
+        fake_engine.EnginePrefix = ""
+        fake_engine.EngineVersion = 0
+        fake_pkg = types.ModuleType("pyrevit")
+        fake_pkg.engine = fake_engine
+        with mock.patch.dict(
+            sys.modules, {"pyrevit": fake_pkg, "pyrevit.engine": fake_engine}
+        ):
+            self.assertEqual(module._engine_name(), module._interpreter_name())
+
+    def test_version_uses_get_formatted(self):
+        module = load_button("Check Setup")
+
+        class Provider(object):
+            def get_formatted(self):
+                return "7.1.0.26319"
+
+        fake_script = types.ModuleType("pyrevit.script")
+        fake_script.get_pyrevit_version = lambda: Provider()
+        fake_pkg = types.ModuleType("pyrevit")
+        fake_pkg.script = fake_script
+        with mock.patch.dict(
+            sys.modules, {"pyrevit": fake_pkg, "pyrevit.script": fake_script}
+        ):
+            self.assertEqual(module._pyrevit_version(), "7.1.0.26319")
+
+    def test_version_falls_back_to_the_package_constants(self):
+        module = load_button("Check Setup")
+        fake_pkg = types.ModuleType("pyrevit")
+        fake_pkg.VERSION_MAJOR = "7"
+        fake_pkg.VERSION_MINOR = "1"
+        fake_pkg.VERSION_PATCH = "0"
+        fake_pkg.BUILD_METADATA = "26319"
+        with mock.patch.dict(
+            sys.modules,
+            {"pyrevit": fake_pkg, "pyrevit.script": None, "pyrevit.versionmgr": None},
+        ):
+            self.assertEqual(module._pyrevit_version(), "7.1.0.26319")
+
+    def test_version_is_unknown_without_pyrevit(self):
+        module = load_button("Check Setup")
+        with mock.patch.dict(
+            sys.modules,
+            {"pyrevit": None, "pyrevit.script": None, "pyrevit.versionmgr": None},
+        ):
+            self.assertEqual(module._pyrevit_version(), "unknown")
+
+    def test_version_falls_back_to_the_version_file_on_sys_path(self):
+        module = load_button("Check Setup")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "pyrevit"))
+            with open(os.path.join(tmp, "pyrevit", "version"), "w") as handle:
+                handle.write("7.1.0.26319+1907\n")
+            with mock.patch.dict(
+                sys.modules,
+                {"pyrevit": None, "pyrevit.script": None, "pyrevit.versionmgr": None},
+            ):
+                with mock.patch.object(sys, "path", [tmp]):
+                    self.assertEqual(module._pyrevit_version(), "7.1.0.26319+1907")
 
 
 if __name__ == "__main__":
