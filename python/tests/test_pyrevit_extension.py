@@ -202,5 +202,28 @@ class TestCheckSetupProbes(unittest.TestCase):
                     self.assertEqual(module._pyrevit_version(), "7.1.0.26319+1907")
 
 
+class TestStaleModules(unittest.TestCase):
+    """A second press must not import the code the first press loaded."""
+
+    def test_build_button_drops_its_own_modules(self):
+        module = load_button("Build Families")
+        planted = {
+            "trunking": types.ModuleType("trunking"),
+            "trunking.revit_api": types.ModuleType("trunking.revit_api"),
+            "build_families": types.ModuleType("build_families"),
+        }
+        with mock.patch.dict(sys.modules, planted):
+            module._drop_stale_modules()
+            for name in planted:
+                self.assertNotIn(name, sys.modules)
+            self.assertIn("json", sys.modules)
+
+    def test_check_setup_drops_the_package(self):
+        module = load_button("Check Setup")
+        with mock.patch.dict(sys.modules, {"trunking.model": types.ModuleType("trunking.model")}):
+            module._drop_stale_modules()
+            self.assertNotIn("trunking.model", sys.modules)
+
+
 if __name__ == "__main__":
     unittest.main()

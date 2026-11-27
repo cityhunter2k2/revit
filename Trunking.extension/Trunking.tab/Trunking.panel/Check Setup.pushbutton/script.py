@@ -22,6 +22,18 @@ import sys
 TITLE = "Trunking - Check Setup"
 
 
+def _drop_stale_modules():
+    """Forget our modules so a reloaded extension reports the new code.
+
+    pyRevit can keep one shared Python runtime per session, so the previous
+    press leaves ``trunking`` in ``sys.modules`` and the model check would run
+    the version Revit saw first.
+    """
+    for name in list(sys.modules):
+        if name == "trunking" or name.startswith("trunking."):
+            del sys.modules[name]
+
+
 def _alert(message, title=TITLE):
     print(message)
     try:
@@ -212,6 +224,7 @@ def _check_models(package_dir):
 
 
 def main():
+    _drop_stale_modules()
     lines = []
     python_ok = sys.version_info >= (3, 6)
 

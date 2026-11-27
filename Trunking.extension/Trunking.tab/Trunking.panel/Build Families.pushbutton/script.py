@@ -20,6 +20,18 @@ import sys
 TITLE = "Trunking - Build Families"
 
 
+def _drop_stale_modules():
+    """Forget our modules so a reloaded extension runs the new code.
+
+    pyRevit can keep one shared Python runtime per session, so the previous
+    press leaves ``trunking``/``build_families`` in ``sys.modules`` and the next
+    press would import the version Revit saw first.
+    """
+    for name in list(sys.modules):
+        if name == "build_families" or name == "trunking" or name.startswith("trunking."):
+            del sys.modules[name]
+
+
 def _alert(message, title=TITLE):
     print(message)
     try:
@@ -168,6 +180,7 @@ def _summary(path):
 
 
 def main():
+    _drop_stale_modules()
     if not _engine_ok():
         _alert(_engine_message())
         _exit()
