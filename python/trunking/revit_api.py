@@ -113,6 +113,7 @@ class RevitApi(api.RevitAdapter):
         self.app = app
         self._log = log
         self._spec_by_name: Dict[str, str] = {}
+        self._transaction = None
         self._import()
 
     # -- imports ----------------------------------------------------------- #
@@ -139,6 +140,37 @@ class RevitApi(api.RevitAdapter):
             self._log(message)
 
     # -- document ---------------------------------------------------------- #
+    def _begin_build_transaction(self, doc) -> None:
+        """Open the one transaction every modification of the build happens in.
+
+        Revit refuses SketchPlane.Create, Material.Create, parameter writes and
+        the rest with ModificationOutsideTransactionException when no
+        transaction is open. One transaction for the whole family also keeps the
+        element handles valid: a Reference taken in one transaction is dead in
+        the next.
+        """
+        self._transaction = None
+        try:
+            transaction = self.DB.Transaction(doc, "Trunking family build")
+            transaction.Start()
+            self._transaction = transaction
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"    could not start a transaction: {type(exc).__name__}: {exc}")
+
+    def _commit_build_transaction(self, doc) -> CapResult:
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is None:
+            return api.failed("no open transaction - the build modified nothing")
+        try:
+            transaction.Commit()
+        except Exception as exc:  # noqa: BLE001
+            return api.failed(f"transaction commit: {type(exc).__name__}: {exc}")
+        status = transaction.GetStatus()
+        if status != self.DB.TransactionStatus.Committed:
+            return api.failed(f"transaction status {status}")
+        return api.ok("transaction committed")
+
     def open_family_template(self, template_path: str, destination: str):
         if not os.path.isfile(template_path):
             raise RuntimeError("family template not found: %s" % template_path)
@@ -146,18 +178,29 @@ class RevitApi(api.RevitAdapter):
         if doc is None:
             raise RuntimeError("Revit could not open %s" % template_path)
         # a template opens untitled; SaveAs(destination) turns it into the .rfa
+        self._begin_build_transaction(doc)
         return doc
 
     def save_family(self, doc, path: str) -> CapResult:
+        committed = self._commit_build_transaction(doc)
+        if committed.failed:
+            return committed
         try:
             options = self.DB.SaveAsOptions()
             options.OverwriteExistingFile = True
             doc.SaveAs(path, options)
-            return api.ok(path)
+            return api.ok("%s (%s)" % (path, committed.message))
         except Exception as exc:  # noqa: BLE001
             return api.failed(f"{type(exc).__name__}: {exc}")
 
     def close_family(self, doc) -> None:
+        transaction = self._transaction
+        if transaction is not None:
+            self._transaction = None
+            try:
+                transaction.RollBack()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             doc.Close(False)
         except Exception:  # noqa: BLE001

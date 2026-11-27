@@ -8,6 +8,7 @@ regression is caught without Revit.
 
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,6 +58,7 @@ def _api():
     instance.app = None
     instance._log = None
     instance._spec_by_name = {}
+    instance._transaction = None
     instance.DB = _DB
     return instance
 
@@ -175,6 +177,96 @@ class TestConnectorSizeBinding(unittest.TestCase):
         # Height missing on the connector element: the build must keep going.
         result = api.bind_connector_size(self._doc(), self._connector({"cw"}), "Width", "Height")
         self.assertEqual(result.status, "FALLBACK", result.message)
+
+
+class _TxDoc(object):
+    def __init__(self):
+        self.events = []
+
+    def SaveAs(self, path, options):
+        self.events.append("saveas")
+
+    def Close(self, save):
+        self.events.append("close")
+
+
+class _Transaction(object):
+    def __init__(self, doc, name):
+        self.doc = doc
+        self.name = name
+        self.committed = False
+
+    def Start(self):
+        self.doc.events.append("start")
+
+    def Commit(self):
+        self.committed = True
+        self.doc.events.append("commit")
+
+    def RollBack(self):
+        self.doc.events.append("rollback")
+
+    def GetStatus(self):
+        return "committed"
+
+
+class _SaveAsOptions(object):
+    def __init__(self):
+        self.OverwriteExistingFile = False
+
+
+class _TxDB(object):
+    Transaction = _Transaction
+    SaveAsOptions = _SaveAsOptions
+
+    class TransactionStatus(object):
+        Committed = "committed"
+
+
+def _tx_api():
+    instance = _api()
+    instance.DB = _TxDB
+    return instance
+
+
+class TestTransactionLifecycle(unittest.TestCase):
+    """Every modification needs an open transaction, and the save needs a commit."""
+
+    def test_open_starts_the_transaction(self):
+        with tempfile.NamedTemporaryFile(suffix=".rft", delete=False) as handle:
+            template = handle.name
+        self.addCleanup(os.remove, template)
+        doc = _TxDoc()
+        api = _tx_api()
+        api.app = type("_App", (), {"OpenDocumentFile": staticmethod(lambda path: doc)})()
+        returned = api.open_family_template(template, "out.rfa")
+        self.assertIs(returned, doc)
+        self.assertEqual(doc.events, ["start"])
+
+    def test_save_commits_before_saveas(self):
+        doc = _TxDoc()
+        api = _tx_api()
+        api._begin_build_transaction(doc)
+        result = api.save_family(doc, "out.rfa")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(doc.events, ["start", "commit", "saveas"])
+
+    def test_save_without_a_transaction_fails(self):
+        result = _tx_api().save_family(_TxDoc(), "out.rfa")
+        self.assertTrue(result.failed)
+        self.assertIn("no open transaction", result.message)
+
+    def test_close_rolls_back_an_open_transaction(self):
+        doc = _TxDoc()
+        api = _tx_api()
+        api._begin_build_transaction(doc)
+        api.close_family(doc)
+        self.assertEqual(doc.events, ["start", "rollback", "close"])
+
+    def test_close_without_a_build_just_closes(self):
+        doc = _TxDoc()
+        _tx_api().close_family(doc)
+        self.assertEqual(doc.events, ["close"])
 
 
 class TestNoRemovedMembers(unittest.TestCase):

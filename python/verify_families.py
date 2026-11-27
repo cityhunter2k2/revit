@@ -152,38 +152,48 @@ def _flex_in_revit(doc, model, api, units) -> List[Dict[str, object]]:
         return [{"size": "n/a", "ok": False, "detail": "Width/Height parameters missing"}]
 
     rows: List[Dict[str, object]] = []
-    for width, height in FLEX_SIZES:
-        manager.Set(width_param, units.length_to_internal(float(width)))
-        manager.Set(height_param, units.length_to_internal(float(height)))
-        doc.Regenerate()
-        values = evaluate_params(model, width, height)
-        expected = evaluate_model(model, values)
-        measured = _measure_doc(doc, api)
-        problems: List[str] = []
-        for name, solid in expected.solids.items():
-            got = measured.get(name)
-            if got is None:
-                problems.append(f"{name}: not found")
-                continue
-            lo, hi = solid.bbox()
-            for axis, index in (("x", 0), ("y", 1), ("z", 2)):
-                if abs(got["min"][index] - lo[index]) > 0.5 or abs(got["max"][index] - hi[index]) > 0.5:
-                    problems.append(
-                        f"{name}.{axis} [{got['min'][index]:.1f},{got['max'][index]:.1f}] "
-                        f"!= [{lo[index]:.1f},{hi[index]:.1f}]"
-                    )
-            if solid.volume > 1e-6 and abs(got["volume"] - solid.volume) > max(1.0, solid.volume * 0.02):
-                problems.append(f"{name}.volume {got['volume']:.1f} != {solid.volume:.1f}")
-        rows.append(
-            {
-                "size": f"{width:.0f}x{height:.0f}",
-                "ok": not problems,
-                "detail": "; ".join(problems[:6]),
-                "c2e": expected.length("CenterToEnd"),
-                "wall": expected.length("WallThickness"),
-            }
-        )
-        print(f"    {width:.0f}x{height:.0f}: {'ok' if not problems else problems[:2]}")
+    # FamilyManager.Set and Regenerate modify the document, so they need a
+    # transaction even though the result is thrown away afterwards.
+    transaction = api.DB.Transaction(doc, "Trunking verify flex")
+    transaction.Start()
+    try:
+        for width, height in FLEX_SIZES:
+            manager.Set(width_param, units.length_to_internal(float(width)))
+            manager.Set(height_param, units.length_to_internal(float(height)))
+            doc.Regenerate()
+            values = evaluate_params(model, width, height)
+            expected = evaluate_model(model, values)
+            measured = _measure_doc(doc, api)
+            problems: List[str] = []
+            for name, solid in expected.solids.items():
+                got = measured.get(name)
+                if got is None:
+                    problems.append(f"{name}: not found")
+                    continue
+                lo, hi = solid.bbox()
+                for axis, index in (("x", 0), ("y", 1), ("z", 2)):
+                    if abs(got["min"][index] - lo[index]) > 0.5 or abs(got["max"][index] - hi[index]) > 0.5:
+                        problems.append(
+                            f"{name}.{axis} [{got['min'][index]:.1f},{got['max'][index]:.1f}] "
+                            f"!= [{lo[index]:.1f},{hi[index]:.1f}]"
+                        )
+                if solid.volume > 1e-6 and abs(got["volume"] - solid.volume) > max(1.0, solid.volume * 0.02):
+                    problems.append(f"{name}.volume {got['volume']:.1f} != {solid.volume:.1f}")
+            rows.append(
+                {
+                    "size": f"{width:.0f}x{height:.0f}",
+                    "ok": not problems,
+                    "detail": "; ".join(problems[:6]),
+                    "c2e": expected.length("CenterToEnd"),
+                    "wall": expected.length("WallThickness"),
+                }
+            )
+            print(f"    {width:.0f}x{height:.0f}: {'ok' if not problems else problems[:2]}")
+    finally:
+        try:
+            transaction.RollBack()
+        except Exception:  # noqa: BLE001 - measurement already collected
+            pass
     return rows
 
 
