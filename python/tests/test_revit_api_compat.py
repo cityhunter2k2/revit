@@ -453,6 +453,36 @@ class TestSingleType(unittest.TestCase):
         self.assertIn("delete refused", result.message)
 
 
+class _NamedParam(object):
+    def __init__(self, name):
+        self.Definition = type("_Def", (), {"Name": name})()
+
+
+class TestFormulaNames(unittest.TestCase):
+    """Revit parses formulas against the names it stores, not ours."""
+
+    def test_renames_known_parameters(self):
+        api = _api()
+        api._family_params = {"Width": _NamedParam("\u5bec\u5ea6"), "Height": _NamedParam("\u9ad8\u5ea6")}
+        text = api.translated_formula("if(Width > Height, Width / 2, Height)")
+        self.assertIn("\u5bec\u5ea6", text)
+        self.assertIn("\u9ad8\u5ea6", text)
+        self.assertNotIn("Width", text)
+
+    def test_does_not_touch_a_substring(self):
+        api = _api()
+        api._family_params = {"Width": _NamedParam("\u5bec\u5ea6")}
+        self.assertEqual(api.translated_formula("Half_Width + Width"), "Half_Width + \u5bec\u5ea6")
+
+    def test_unchanged_when_names_match(self):
+        api = _api()
+        api._family_params = {"Width": _NamedParam("Width")}
+        self.assertEqual(api.translated_formula("Width / 2"), "Width / 2")
+
+    def test_no_parameters_means_no_change(self):
+        self.assertEqual(_api().translated_formula("Width / 2"), "Width / 2")
+
+
 class TestNoRemovedMembers(unittest.TestCase):
     def test_sources_do_not_use_element_id_integer_value(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

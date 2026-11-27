@@ -21,6 +21,7 @@ from __future__ import annotations
 import glob
 import math
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -348,15 +349,45 @@ class RevitApi(api.RevitAdapter):
                 names.append("<no name>")
         return names
 
+    def _revit_names(self) -> Dict[str, str]:
+        """Model parameter name -> the name Revit actually stores.
+
+        A family template may already own parameters called "Width", "Height",
+        ... and hand back its own (possibly localised) definition when asked to
+        add them again. Formulas are parsed by Revit against those real names.
+        """
+        mapping: Dict[str, str] = {}
+        for model_name, parameter in self._family_params.items():
+            try:
+                actual = str(parameter.Definition.Name)
+            except Exception:  # noqa: BLE001
+                continue
+            if actual and actual != model_name:
+                mapping[model_name] = actual
+        return mapping
+
+    def translated_formula(self, formula: str) -> str:
+        """Rewrite the identifiers in a formula to the names Revit holds."""
+        mapping = self._revit_names()
+        if not mapping:
+            return formula
+        pattern = re.compile(
+            r"\b(?:%s)\b" % "|".join(re.escape(key) for key in sorted(mapping, key=len, reverse=True))
+        )
+        return pattern.sub(lambda match: mapping[match.group(0)], formula)
+
     def set_formula(self, doc, name: str, formula: str) -> CapResult:
         param = self._param(doc, name)
         if param is None:
             return api.failed(f"unknown parameter {name}")
         if not param.IsInstance:
             return api.failed(f"{name} is a type parameter - formulas may not reference instances")
+        translated = self.translated_formula(formula)
+        if translated != formula:
+            self.log(f"    formula for {name} renamed to {translated!r}")
         try:
-            doc.FamilyManager.SetFormula(param, formula)
-            return api.ok(formula)
+            doc.FamilyManager.SetFormula(param, translated)
+            return api.ok(translated)
         except Exception as exc:  # noqa: BLE001
             return api.failed(f"{name}: {type(exc).__name__}: {exc}")
 
