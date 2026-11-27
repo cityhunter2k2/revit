@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trunking.model import SPEC_LENGTH, ParamDef  # noqa: E402
 from trunking.revit_api import RevitApi, element_id_value  # noqa: E402
 
 CATEGORY_ID = -2001000
@@ -454,6 +455,8 @@ class TestSingleType(unittest.TestCase):
 
 
 class _NamedParam(object):
+    IsInstance = True
+
     def __init__(self, name):
         self.Definition = type("_Def", (), {"Name": name})()
 
@@ -481,6 +484,111 @@ class TestFormulaNames(unittest.TestCase):
 
     def test_no_parameters_means_no_change(self):
         self.assertEqual(_api().translated_formula("Width / 2"), "Width / 2")
+
+
+class TestFormulaGuards(unittest.TestCase):
+    """SetFormula on a name that is not in the family is what the crash fitted."""
+
+    def _api(self, names):
+        parameters = [_NamedParam(name) for name in names]
+        formulas = []
+
+        class _Manager(object):
+            Parameters = parameters
+
+            def SetFormula(self, parameter, formula):
+                formulas.append((parameter, formula))
+
+        manager = _Manager()
+        doc = type("_Doc", (), {"FamilyManager": manager})()
+        return _api(), doc, formulas
+
+    def test_unknown_references_are_reported(self):
+        api, doc, _ = self._api(["Half_Width", "Stub"])
+        self.assertEqual(api._unknown_references(doc, "Width / 2"), ["Width"])
+        self.assertEqual(api._unknown_references(doc, "Half_Width + Stub"), [])
+
+    def test_units_and_keywords_are_not_references(self):
+        api, doc, _ = self._api(["Half_Width"])
+        self.assertEqual(api._unknown_references(doc, "if(Half_Width > 50 mm, 1 mm, 2 mm)"), [])
+
+    def test_formula_with_a_missing_parameter_is_not_sent(self):
+        api, doc, formulas = self._api(["Half_Width"])
+        api._param = lambda doc, name: _NamedParam("Half_Width")
+        result = api.set_formula(doc, "Half_Width", "Width / 2")
+        self.assertTrue(result.failed, result.message)
+        self.assertIn("Width", result.message)
+        self.assertEqual(formulas, [])
+
+    def test_a_resolvable_formula_is_sent(self):
+        api, doc, formulas = self._api(["Half_Width", "Width"])
+        api._param = lambda doc, name: _NamedParam("Half_Width")
+        result = api.set_formula(doc, "Half_Width", "Width / 2")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(len(formulas), 1)
+
+
+class TestParameterNameCollision(unittest.TestCase):
+    """A localised built-in owns the name; the family needs a suffixed twin."""
+
+    def _api(self):
+        class _SpecTypeId(object):
+            Length = "spec:length"
+            Angle = "spec:angle"
+
+            class String(object):
+                Text = "spec:text"
+
+            class Boolean(object):
+                YesNo = "spec:yesno"
+
+            class Reference(object):
+                Material = "spec:material"
+
+        class _GroupTypeId(object):
+            Geometry = "group:geometry"
+            Data = "group:data"
+
+        class _BuiltInParameterGroup(object):
+            PG_GEOMETRY = "bip:geometry"
+            PG_DATA = "bip:data"
+
+        class _ParameterType(object):
+            Length = "pt:length"
+
+        class _DB(object):
+            SpecTypeId = _SpecTypeId
+            GroupTypeId = _GroupTypeId
+            BuiltInParameterGroup = _BuiltInParameterGroup
+            ParameterType = _ParameterType
+
+        api = _api()
+        api.DB = _DB
+        return api
+
+    def test_collision_creates_a_suffixed_twin(self):
+        created = []
+
+        class _Manager(object):
+            def __init__(self):
+                self.Parameters = []
+
+            def AddParameter(self, name, group, spec, is_instance):
+                if name == "Width":
+                    raise RuntimeError("The parameter name is already in use")
+                parameter = _NamedParam(name)
+                self.Parameters.append(parameter)
+                created.append(name)
+                return parameter
+
+        manager = _Manager()
+        doc = type("_Doc", (), {"FamilyManager": manager})()
+        api = self._api()
+        result = api.add_instance_parameter(doc, ParamDef("Width", SPEC_LENGTH, "Geometry"))
+        self.assertEqual(result.status, "FALLBACK", result.message)
+        self.assertIn("Width_TS", created)
+        self.assertIn("Width", api._family_params)
+        self.assertEqual(api.translated_formula("Width / 2"), "Width_TS / 2")
 
 
 class TestNoRemovedMembers(unittest.TestCase):

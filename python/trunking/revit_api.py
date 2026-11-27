@@ -49,6 +49,27 @@ SPEC_MAP = {
     SPEC_MATERIAL: ("Reference", "Material"),
 }
 
+#: Suffix used when a parameter name is already owned by a localised built-in.
+PARAM_SUFFIX = "_TS"
+
+#: Tokens allowed in a Revit formula besides parameter names.
+FORMULA_WORDS = frozenset(
+    {
+        "if",
+        "and",
+        "or",
+        "not",
+        "mm",
+        "cm",
+        "m",
+        "ft",
+        "in",
+        "degrees",
+        "radians",
+        "pi",
+    }
+)
+
 
 def element_id_value(element_id: Any) -> int:
     """Integer value of an ``ElementId`` on this Revit release.
@@ -101,7 +122,10 @@ def _probe(attempts: Sequence[Tuple[str, Any]], log=None) -> CapResult:
         if log:
             log(f"    probe ok: {label}")
         return api.ok(label)
-    return api.fallback("; ".join(errors[:3]) or "no candidate path available")
+    # Nothing worked: that is a failure, not a degradation. Callers check
+    # `.failed` and used to see FALLBACK here, so every failed AddParameter was
+    # reported as "ok" while no parameter had been created.
+    return api.failed("; ".join(errors[:3]) or "no candidate path available")
 
 
 class Units:
@@ -290,12 +314,13 @@ class RevitApi(api.RevitAdapter):
         forge_group, bip_group = GROUP_MAP.get(definition.group, ("Data", "PG_DATA"))
         _, ptype = SPEC_MAP.get(definition.spec, ("Length", "Length"))
         self._spec_by_name[definition.name] = definition.spec
+        self.log("    add %s (%s)" % (definition.name, definition.spec))
 
         created = []
 
-        def modern():
+        def create(name):
             parameter = manager.AddParameter(
-                definition.name, getattr(self.DB.GroupTypeId, forge_group), self._spec_id(definition.spec), True
+                name, getattr(self.DB.GroupTypeId, forge_group), self._spec_id(definition.spec), True
             )
             created.append(parameter)
             return parameter is not None
@@ -312,13 +337,39 @@ class RevitApi(api.RevitAdapter):
 
         result = _probe(
             (
-                ("FamilyManager.AddParameter(ForgeTypeId)", modern),
+                ("FamilyManager.AddParameter(ForgeTypeId)", lambda: create(definition.name)),
                 ("FamilyManager.AddParameter(ParameterType)", legacy),
             ),
             log=self.log,
         )
         if result.failed:
-            return api.failed(f"could not create {definition.name}: {result.message}")
+            # A localised built-in (桥架宽度 for Width) owns the name, so the
+            # family cannot hold a second parameter called like it: use a
+            # suffixed twin and let the formula translation follow the name.
+            twin = definition.name + PARAM_SUFFIX
+            existing = {}
+            for parameter in manager.Parameters:
+                try:
+                    existing[str(parameter.Definition.Name)] = parameter
+                except Exception:  # noqa: BLE001
+                    continue
+            if twin in existing:
+                self._family_params[definition.name] = existing[twin]
+                self._spec_by_name[twin] = definition.spec
+                self.log("    reusing the existing %s for %s" % (twin, definition.name))
+                return api.fallback("%s is taken by a built-in; using %s" % (definition.name, twin))
+            created[:] = []
+            twin_result = _probe(
+                (("FamilyManager.AddParameter(%s)" % twin, lambda: create(twin)),), log=self.log
+            )
+            if twin_result.failed:
+                self.log("    add failed %s: %s" % (definition.name, result.message))
+                return api.failed(f"could not create {definition.name}: {result.message}")
+            if created and created[-1] is not None:
+                self._family_params[definition.name] = created[-1]
+            self._spec_by_name[twin] = definition.spec
+            self.log("    created %s instead of %s (%s)" % (twin, definition.name, result.message))
+            return api.fallback("%s is taken; created %s" % (definition.name, twin))
         # Keep the object Revit handed back: looking the parameter up again by
         # Definition.Name is what turned "Width" into "unknown parameter" once
         # the template already owned a parameter of that name.
@@ -376,7 +427,20 @@ class RevitApi(api.RevitAdapter):
         )
         return pattern.sub(lambda match: mapping[match.group(0)], formula)
 
+    def _unknown_references(self, doc, formula: str) -> List[str]:
+        """Identifiers in a formula that the family does not have.
+
+        Revit parses the text its own way, and a reference to a parameter that
+        is not there does not always raise: the profile of the crash on the
+        second family fits a formula referencing a parameter that was never
+        created. Check the text against the parameters that exist first.
+        """
+        tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula or ""))
+        known = set(self.parameter_inventory(doc))
+        return sorted(token for token in tokens if token not in known and token not in FORMULA_WORDS)
+
     def set_formula(self, doc, name: str, formula: str) -> CapResult:
+        self.log("    formula %s = %s" % (name, formula))
         param = self._param(doc, name)
         if param is None:
             return api.failed(f"unknown parameter {name}")
@@ -385,6 +449,12 @@ class RevitApi(api.RevitAdapter):
         translated = self.translated_formula(formula)
         if translated != formula:
             self.log(f"    formula for {name} renamed to {translated!r}")
+        unknown = self._unknown_references(doc, translated)
+        if unknown:
+            return api.failed(
+                "%s: the formula references %s, which this family does not have"
+                % (name, ", ".join(unknown))
+            )
         try:
             doc.FamilyManager.SetFormula(param, translated)
             return api.ok(translated)
@@ -392,6 +462,7 @@ class RevitApi(api.RevitAdapter):
             return api.failed(f"{name}: {type(exc).__name__}: {exc}")
 
     def set_value(self, doc, name: str, value: Any) -> CapResult:
+        self.log("    default %s = %r" % (name, value))
         param = self._param(doc, name)
         if param is None:
             return api.failed(f"unknown parameter {name}")

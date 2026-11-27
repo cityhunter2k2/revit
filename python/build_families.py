@@ -135,18 +135,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     os.makedirs(out_dir, exist_ok=True)
     reports = []
     paths = {}
+    emit = progress if close_progress is not None else print
     for model in models:
         out_path = os.path.join(out_dir, model.kind.filename.replace(".rfa", suffix))
-        print(f"--- {model.kind.filename}")
+        emit(f"--- {model.kind.filename}")
         report = build_family(model, revit, template, out_path)
         reports.append(report)
         paths[model.kind.key] = out_path
         for step in report.steps:
             if step.result.status in (api.FAILED, api.FALLBACK):
-                print(f"    {step}")
-        print(f"    {report.summary()}")
+                emit(f"    {step}")
+        emit(f"    {report.summary()}")
         if report.failures:
-            print(f"    FAILED: {len(report.failures)} step(s)")
+            emit(f"    FAILED: {len(report.failures)} step(s)")
         document = getattr(report.built, "document", None)
         if document is not None and not args.keep_open:
             # close only after the save succeeded; an unsaved document is discarded
