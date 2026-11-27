@@ -179,6 +179,31 @@ def _summary(path):
     return "\n".join(lines)
 
 
+def _load_env_file(package_dir):
+    """Apply ``trunking.env`` from the repo root (KEY=VALUE, TRUNKING_* only).
+
+    Revit crashes natively take a Python ``except`` with them, so the only way
+    to bisect one is a switch that survives the crash: edit the file and press
+    the button again instead of restarting Revit with new system variables.
+    """
+    path = os.path.join(os.path.dirname(package_dir), "trunking.env")
+    if not os.path.isfile(path):
+        return None
+    handle = open(path)
+    try:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key.startswith("TRUNKING_"):
+                os.environ[key] = value.strip()
+    finally:
+        handle.close()
+    return path
+
+
 def main():
     _drop_stale_modules()
     if not _engine_ok():
@@ -195,6 +220,12 @@ def main():
         )
         _exit()
         return
+
+    env_file = _load_env_file(package_dir)
+    if env_file:
+        print("settings      : %s" % env_file)
+    if os.environ.get("TRUNKING_SKIP"):
+        print("skipping      : %s" % os.environ.get("TRUNKING_SKIP"))
 
     template = _pick_template(package_dir)
     if not template:

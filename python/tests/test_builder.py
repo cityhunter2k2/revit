@@ -11,7 +11,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trunking import adapter as api  # noqa: E402
-from trunking.builder import DEFAULT_TYPE_NAME, build_all, build_family  # noqa: E402
+from trunking.builder import DEFAULT_TYPE_NAME, build_all, build_family, skipped_phases  # noqa: E402
+from build_families import open_progress_log  # noqa: E402
 from trunking.fake_revit import FakeRevit  # noqa: E402
 from trunking.model import build_model  # noqa: E402
 from trunking.report import build_summary_markdown  # noqa: E402
@@ -192,6 +193,38 @@ class TestBuildFailures(unittest.TestCase):
             self.assertIn("Trunking_90_MitreBend_FrontOpening.rfa", files)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestCrashDiagnostics(unittest.TestCase):
+    """A native crash cannot be caught, so these two carry the evidence."""
+
+    def test_skipped_phases_parses_the_switch(self):
+        previous = os.environ.get("TRUNKING_SKIP")
+        try:
+            os.environ["TRUNKING_SKIP"] = "types, Connectors"
+            self.assertEqual(skipped_phases(), {"types", "connectors"})
+            os.environ["TRUNKING_SKIP"] = ""
+            self.assertEqual(skipped_phases(), set())
+            os.environ.pop("TRUNKING_SKIP")
+            self.assertEqual(skipped_phases(), set())
+        finally:
+            if previous is None:
+                os.environ.pop("TRUNKING_SKIP", None)
+            else:
+                os.environ["TRUNKING_SKIP"] = previous
+
+    def test_progress_log_is_on_disk_before_the_next_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log, path, close = open_progress_log(tmp)
+            try:
+                log("phase 2/8 single type")
+                log("   solid Tray_Base")
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read()
+            finally:
+                close()
+            self.assertIn("phase 2/8 single type", text)
+            self.assertIn("solid Tray_Base", text)
 
 
 if __name__ == "__main__":

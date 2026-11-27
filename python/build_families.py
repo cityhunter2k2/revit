@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from typing import Dict, List, Optional, Sequence
 
@@ -55,6 +56,37 @@ def get_app():
         return None
 
 
+def open_progress_log(out_dir: str):
+    """Append-only log that is flushed and fsynced after every line.
+
+    A native crash takes the Revit output window with it; the last line in this
+    file is what says which step was running when Revit died.
+    """
+    path = os.path.join(out_dir, "build-progress.log")
+    handle = open(path, "a", encoding="utf-8")
+    handle.write("\n=== build %s ===\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    handle.flush()
+    os.fsync(handle.fileno())
+
+    def log(message):
+        text = str(message)
+        print(text)
+        try:
+            handle.write(text + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        except Exception:  # noqa: BLE001 - logging must never break the build
+            pass
+
+    def close():
+        try:
+            handle.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    return log, path, close
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     here = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -70,6 +102,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     kinds = [KIND_BY_KEY[key.strip()] for key in args.only.split(",") if key.strip()] or list(FAMILY_KINDS)
     models = [build_model(kind, wall_variant=args.wall_variant) for kind in kinds]
+    close_progress = None
 
     if args.dry_run:
         from trunking.fake_revit import FakeRevit
@@ -92,9 +125,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "       pass --template <path> or set TRUNKING_TEMPLATE."
             )
             return 2
-        revit = RevitApi(app, log=print)
         out_dir = args.out
         suffix = ".rfa"
+        os.makedirs(out_dir, exist_ok=True)
+        progress, progress_path, close_progress = open_progress_log(out_dir)
+        print("progress log  : %s" % progress_path)
+        revit = RevitApi(app, log=progress)
 
     os.makedirs(out_dir, exist_ok=True)
     reports = []
@@ -155,6 +191,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"summary json   : {json_path}")
 
     failed = [r for r in reports if r.failures]
+    if close_progress is not None:
+        close_progress()
     return 1 if failed else 0
 
 

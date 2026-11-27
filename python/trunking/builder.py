@@ -18,7 +18,7 @@ Step order matters:
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 from . import adapter as api
 from .adapter import BuildReport, BuiltFamily, CapResult, LabelRequest
@@ -27,6 +27,16 @@ from .evaluate import evaluate_model, evaluate_params
 from .model import FamilyModel, validate_model
 
 DEFAULT_TYPE_NAME = "Standard"
+
+
+def skipped_phases() -> Set[str]:
+    """Phases the operator asked to skip, via ``TRUNKING_SKIP=types,connectors``.
+
+    Revit can die natively on an API call, and a native crash cannot be caught
+    from Python, so the only way to bisect one is to not make the call.
+    """
+    raw = os.environ.get("TRUNKING_SKIP", "")
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
 
 
 def build_family(
@@ -51,14 +61,24 @@ def build_family(
     built = BuiltFamily(filename=model.kind.filename)
 
     # 1 - document ------------------------------------------------------- #
+    revit.log("phase 1/8 open template")
     doc = revit.open_family_template(template_path, out_path)
     built.document = doc
     report.add("open_template", api.ok(template_path), os.path.basename(template_path))
     report.add_capability("category", revit.ensure_cable_tray_fitting_category(doc))
 
     # 2 - single type ---------------------------------------------------- #
-    type_result = revit.ensure_single_type(doc, DEFAULT_TYPE_NAME)
-    report.add("ensure_single_type", type_result, f"types={revit.family_type_count(doc)}")
+    revit.log("phase 2/8 single type (the template ships several)")
+    if "types" in skipped_phases():
+        revit.log("   skipped by TRUNKING_SKIP=types")
+        report.add(
+            "ensure_single_type",
+            api.skipped("TRUNKING_SKIP=types: the template's extra types are kept"),
+        )
+        type_result = api.skipped("types kept")
+    else:
+        type_result = revit.ensure_single_type(doc, DEFAULT_TYPE_NAME)
+        report.add("ensure_single_type", type_result, f"types={revit.family_type_count(doc)}")
     if revit.family_type_count(doc) != 1:
         report.add(
             "assert_single_type",
@@ -66,6 +86,7 @@ def build_family(
         )
 
     # 3 - parameters ----------------------------------------------------- #
+    revit.log("phase 3/8 parameters (%d)" % len(model.params))
     existing = set(revit.parameter_names(doc))
     created = 0
     for definition in model.params:
@@ -83,6 +104,7 @@ def build_family(
     report.add("parameter_count", api.ok(str(len(model.params))), f"{created} created")
 
     # 4 - subcategories / material -------------------------------------- #
+    revit.log("phase 4/8 subcategories and materials")
     materials: Dict[str, object] = {}
     for name, material_param in model.subcategories.items():
         report.add("subcategory", revit.ensure_subcategory(doc, name), name)
@@ -92,9 +114,11 @@ def build_family(
     report.add("materials", api.ok(str(sorted(materials))), ", ".join(sorted(materials)))
 
     # 5 - geometry ------------------------------------------------------- #
+    revit.log("phase 5/8 geometry (%d solids)" % len(model.solids))
     elements: Dict[str, object] = {}
     dimension_count = 0
     for solid in model.solids:
+        revit.log("   solid %s" % solid.name)
         solid_eval = evaluated.solids[solid.name]
         loops = [loop.points for loop in solid_eval.loops]
         element = revit.create_extrusion(doc, solid, loops, solid_eval.start, solid_eval.end)
@@ -134,25 +158,33 @@ def build_family(
             report.add("subcategory_assign", api.ok(solid.subcategory), solid.name)
 
     # 6 - connectors ----------------------------------------------------- #
+    revit.log("phase 6/8 connectors (%d)" % len(model.connectors))
     connector_refs = []
-    for connector in model.connectors:
-        host = elements.get(connector.host_solid)
-        ref = revit.create_cable_tray_connector(doc, connector, numbers, host)
-        if ref is None:
-            report.add("create_connector", api.failed(connector.name), connector.host_solid)
-            continue
-        connector_refs.append(ref)
-        report.add("create_connector", api.ok(connector.host_solid), connector.name)
-        report.add_capability(
-            f"connector_size:{connector.name}",
-            revit.bind_connector_size(doc, ref, connector.width_param, connector.height_param),
-        )
+    if "connectors" in skipped_phases():
+        revit.log("   skipped by TRUNKING_SKIP=connectors")
+        report.add("create_connector", api.skipped("TRUNKING_SKIP=connectors"), "all")
+    else:
+        for connector in model.connectors:
+            host = elements.get(connector.host_solid)
+            ref = revit.create_cable_tray_connector(doc, connector, numbers, host)
+            if ref is None:
+                report.add("create_connector", api.failed(connector.name), connector.host_solid)
+                continue
+            connector_refs.append(ref)
+            report.add("create_connector", api.ok(connector.host_solid), connector.name)
+            report.add_capability(
+                f"connector_size:{connector.name}",
+                revit.bind_connector_size(doc, ref, connector.width_param, connector.height_param),
+            )
     if len(connector_refs) == 2:
         report.add("link_connectors", revit.link_connectors(doc, connector_refs[0], connector_refs[1]))
+    elif "connectors" in skipped_phases():
+        report.add("link_connectors", api.skipped("connectors were skipped"))
     else:
         report.add("link_connectors", api.failed(f"expected 2 connectors, got {len(connector_refs)}"))
 
     # 7 - part type, symbols, regenerate --------------------------------- #
+    revit.log("phase 7/8 part type, symbols, regenerate")
     part = revit.set_part_type(doc, "Elbow")
     report.add_capability("part_type", part)
     built.part_type = "Elbow" if part.ok else part.status
@@ -161,6 +193,7 @@ def build_family(
     revit.regenerate(doc)
 
     # 8 - final single-type assertion + save ----------------------------- #
+    revit.log("phase 8/8 save")
     built.type_count = revit.family_type_count(doc)
     built.parameter_count = len(model.params)
     built.connector_count = len(connector_refs)

@@ -225,5 +225,32 @@ class TestStaleModules(unittest.TestCase):
             self.assertNotIn("trunking.model", sys.modules)
 
 
+class TestSettingsFile(unittest.TestCase):
+    """trunking.env lets the operator change behaviour without a Revit restart."""
+
+    def test_trunking_keys_are_applied(self):
+        module = load_button("Build Families")
+        previous = os.environ.pop("TRUNKING_SKIP", None)
+        self.addCleanup(
+            lambda: os.environ.pop("TRUNKING_SKIP", None)
+            if previous is None
+            else os.environ.__setitem__("TRUNKING_SKIP", previous)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            package = os.path.join(tmp, "python")
+            os.makedirs(package)
+            with open(os.path.join(tmp, "trunking.env"), "w", encoding="utf-8") as handle:
+                handle.write("# comment\n\nTRUNKING_SKIP = connectors\nOTHER_KEY=ignored\n")
+            path = module._load_env_file(package)
+            self.assertTrue(path)
+            self.assertEqual(os.environ.get("TRUNKING_SKIP"), "connectors")
+            self.assertIsNone(os.environ.get("OTHER_KEY"))
+
+    def test_missing_file_is_harmless(self):
+        module = load_button("Build Families")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(module._load_env_file(os.path.join(tmp, "python")))
+
+
 if __name__ == "__main__":
     unittest.main()
