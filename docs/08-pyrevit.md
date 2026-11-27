@@ -1,9 +1,30 @@
 # 在 pyRevit 裡使用
 
 本 repo 附帶一個 pyRevit 擴充套件 `Trunking.extension`，在 Revit 功能區加一個 **Trunking** 頁籤、
-兩個按鈕：**Build Families**（產生六個 `.rfa`）與 **Verify Families**（在 Revit 內逐一伸縮量測）。
+三個按鈕：**Check Setup**（環境自檢）、**Build Families**（產生六個 `.rfa`）、
+**Verify Families**（在 Revit 內逐一伸縮量測）。
 
-## 0. 先確認引擎（最重要）
+## 0. 已實測環境
+
+| 項目 | 值 |
+|---|---|
+| pyRevit | **v7.1.0**（build 26319）|
+| 預設引擎 | IronPython 2.7.12 |
+| 可用 CPython | **3.12.3** ✅ |
+| Revit | 2024 / 2025 / 2026（`find_template` 依序搜尋）|
+
+⚠️ 因為**預設引擎是 IronPython 2.7**，按鈕若被 IronPython 執行就只會跳說明視窗。
+請先按 **Check Setup**：它會回報實際引擎，並確認套件、模型、樣板、輸出夾是否就緒。
+
+若 Check Setup 顯示 IronPython：
+
+```
+pyRevit ▸ Settings ▸ Engines ▸ Default Engine = CPython（3.12）
+```
+
+（或保留按鈕檔頭的 `#! python3`，pyRevit 7 會用 CPython 執行該腳本。）
+
+## 0.1 先確認引擎（最重要）
 
 | pyRevit 引擎 | 能不能跑 | 說明 |
 |---|---|---|
@@ -28,7 +49,7 @@
 1. `pyRevit ▸ Settings ▸ Custom Extension Directories` → **Add Folder** → 選這個 repo 的根目錄
    （也就是**包含** `Trunking.extension` 的那一層，例如 `C:\GIT\revit`）。
 2. `pyRevit ▸ Reload`。
-3. 功能區出現 **Trunking** 頁籤 → **Trunking** 面板 → `Build Families` / `Verify Families`。
+3. 功能區出現 **Trunking** 頁籤 → **Trunking** 面板 → `Check Setup` / `Build Families` / `Verify Families`。
 
 > 也可以把 `Trunking.extension` 複製到 `%APPDATA%\pyRevit\Extensions\`。此時按鈕找不到 `python/trunking`，
 > 第一次執行會請你選資料夾；或建立一個 `trunking_home.txt`（放在按鈕的 `script.py` 旁邊），
@@ -42,7 +63,28 @@
 | `TRUNKING_OUT` | `.rfa` 輸出資料夾 | `%USERPROFILE%\Documents\Trunking\families` |
 | `TRUNKING_TEMPLATE` | `Metric Cable Tray Fitting.rft` 完整路徑 | 自動搜尋 `RVT 2026…2020` |
 
-## 3. Build Families
+## 3. Check Setup（先按這個）
+
+回報：
+
+```
+Python engine : cpython
+Python version: 3.12.3
+pyRevit       : 7.1.0.26319
+Revit         : Autodesk Revit 2025 (2025)
+
+Package       : OK  C:\GIT\revit\python
+Family models : ALL PASS
+    Trunking_90_MitreBend_FrontOpening.rfa               PASS 41 checks
+    ...（六族）
+Template      : C:\ProgramData\Autodesk\RVT 2025\Family Templates\Chinese\Metric Cable Tray Fitting.rft
+Output folder : OK  C:\Users\<你>\Documents\Trunking\families
+```
+
+它是用 Python 2/3 共同語法寫的，所以**即使被 IronPython 執行也能給你完整診斷**（只是會告訴你需要切到 CPython）。
+`Family models : ALL PASS` 代表六族的幾何、參數、尺寸計畫都正常，與 Revit 無關，可以先在 Revit 外確認模型是好的。
+
+## 4. Build Families
 
 按下去之後會：
 
@@ -68,7 +110,7 @@ Documents\Trunking\families\
 建置報告會列出每一步的 `OK / FALLBACK / SKIPPED / FAILED`；只要出現 `FALLBACK`，就照
 `docs/03-manual-labelling.md` 在族編輯器補做（通常是草圖尺寸的標籤）。
 
-## 4. Verify Families
+## 5. Verify Families
 
 選 `.rfa` 資料夾 → 腳本會**不新增任何類型**，只以 `FamilyManager.Set` 改 `Width` / `Height`，
 跑完 9 個目錄尺寸 + `300×100` + `50×100`，把每個實體的邊界框與體積和模型預測比對，
@@ -88,7 +130,7 @@ Tray_Base.x [0.0,275.0] != [0.0,225.0]
 | 尺寸沒跟著參數變 | 草圖尺寸沒有標籤到參數（`FALLBACK`）| 照 `03-manual-labelling.md` 補標 |
 | 邊界框差一個固定值 | 拉伸偏移沒關聯到 `EXTRUSION_*` 參數 | 檢查建置報告 `extrusion_offsets:*` |
 
-## 5. 直接從 pyRevit 的輸出視窗跑 CLI
+## 6. 直接從 pyRevit 的輸出視窗跑 CLI
 
 想加參數（例如 `--wall-variant catalogue`）時，用 pyRevit 的 **Settings ▸ …** 或直接在
 RevitPythonShell／CPython 環境執行：
@@ -100,18 +142,19 @@ import build_families
 build_families.main(["--out", r"D:\BIM\Trunking", "--wall-variant", "catalogue"])
 ```
 
-## 6. 如果專案規定只能用 IronPython
+## 7. 如果專案規定只能用 IronPython
 
 那就走 C# Add-in 路線（本 repo 的 API 層 `python/trunking/revit_api.py` 有意寫成「每個方法對應一個
 Revit 呼叫」，可以直接照抄成 C#；幾何與尺寸計畫則由 `python/` 產出的 JSON／Markdown 規格書當依據）。
 告訴我一聲，我可以把 `adapter.py` 的介面逐一翻成 C# 專案（`IExternalCommand` + `.addin` manifest）。
 
-## 7. 疑難排解
+## 8. 疑難排解
 
 | 症狀 | 對策 |
 |---|---|
 | 按鈕灰色／不存在 | `pyRevit ▸ Reload`；確認「Custom Extension Directories」指向 repo 根目錄 |
-| 跳出「needs CPython engine」 | 見第 0 節，切換引擎或升級 pyRevit |
+| 跳出「needs CPython engine」 | 見第 0 節：`Settings ▸ Engines ▸ Default Engine = CPython` |
+| Check Setup 顯示 `Python engine : ironpython27` | 同上；本工具必須在 CPython 下執行 |
 | 跳出「Could not find the 'trunking' python package」 | 設 `TRUNKING_HOME`，或建立 `trunking_home.txt` |
 | 跳出「Metric Cable Tray Fitting.rft was not found」 | 設 `TRUNKING_TEMPLATE`；樣板在 `C:\ProgramData\Autodesk\RVT 20xx\Family Templates\<語言>\` |
 | 執行到一半 Revit 卡住 | 族檔較大時逐族建置較穩；先只建一個（CLI `--only mitre_front`）確認流程 |

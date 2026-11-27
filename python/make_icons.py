@@ -69,6 +69,28 @@ def draw_verify(path: str) -> None:
     canvas.save(path)
 
 
+def draw_check_setup(path: str) -> None:
+    """Magnifier over a small elbow - the environment check button."""
+    canvas = Canvas(96, 96, PAPER)
+    _poly(canvas, [(8, 30), (30, 23), (30, 56), (8, 63)], STEEL, STEEL_DARK)
+    _poly(canvas, [(30, 56), (50, 62), (50, 34), (30, 23)], STEEL_DARK, INK)
+    _poly(canvas, [(8, 30), (30, 23), (42, 27), (20, 34)], COVER, COVER_DARK)
+    ring = (46, 96, 160)
+    for radius, thick in ((22, 5), (15, 4)):
+        steps = 60
+        for index in range(steps):
+            a0 = 6.2831853 * index / steps
+            a1 = 6.2831853 * (index + 1) / steps
+            canvas.draw_line(
+                (60 + radius * __import__("math").cos(a0), 44 + radius * __import__("math").sin(a0)),
+                (60 + radius * __import__("math").cos(a1), 44 + radius * __import__("math").sin(a1)),
+                ring,
+                thick,
+            )
+    canvas.draw_line((68, 58), (88, 84), ring, 7.0)
+    canvas.save(path)
+
+
 def main() -> int:
     if not os.path.isdir(PANEL):
         print("extension folder missing: %s" % PANEL)
@@ -83,6 +105,10 @@ def main() -> int:
             os.path.join(PANEL, "Verify Families.pushbutton", "icon.png"),
             dict(accent=COVER, label="CHK"),
         ),
+        (
+            os.path.join(PANEL, "Check Setup.pushbutton", "icon.png"),
+            dict(accent=COVER, label="ENV"),
+        ),
     ]
     for path, kwargs in targets:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -91,6 +117,9 @@ def main() -> int:
     verify_icon = os.path.join(PANEL, "Verify Families.pushbutton", "icon.png")
     draw_verify(verify_icon)
     print("wrote %s (verify)" % verify_icon)
+    setup_icon = os.path.join(PANEL, "Check Setup.pushbutton", "icon.png")
+    draw_check_setup(setup_icon)
+    print("wrote %s (setup)" % setup_icon)
     return 0
 
 

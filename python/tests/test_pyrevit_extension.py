@@ -10,7 +10,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXT = os.path.join(ROOT, "Trunking.extension")
 PANEL = os.path.join(EXT, "Trunking.tab", "Trunking.panel")
-BUTTONS = ("Build Families", "Verify Families")
+BUTTONS = ("Check Setup", "Build Families", "Verify Families")
 
 
 def load_button(name):
@@ -75,10 +75,19 @@ class TestButtonBootstrap(unittest.TestCase):
         self.assertIsNone(module._normalise(os.path.join(ROOT, "nope")))
 
     def test_engine_message_mentions_cpython(self):
-        for name in BUTTONS:
+        for name in ("Build Families", "Verify Families"):
             module = load_button(name)
             message = module._engine_message()
             self.assertIn("CPython", message)
+
+    def test_check_setup_reports_the_environment(self):
+        module = load_button("Check Setup")
+        self.assertTrue(module._has_package(os.path.join(ROOT, "python")))
+        self.assertEqual(module._find_python_dir(), os.path.join(ROOT, "python"))
+        rows, failures = module._check_models(os.path.join(ROOT, "python"))
+        self.assertEqual(failures, 0)
+        self.assertEqual(len(rows), 6)
+        self.assertTrue(any("PASS" in row for row in rows))
 
     def test_build_summary_rendering(self):
         module = load_button("Build Families")
