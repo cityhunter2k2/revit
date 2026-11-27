@@ -1,0 +1,5 @@
+# generated build artefacts (the .rfa files are produced inside Revit)
+build/
+__pycache__/
+*.pyc
+.DS_Store
