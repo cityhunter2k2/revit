@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trunking import adapter as api  # noqa: E402
 from trunking.builder import DEFAULT_TYPE_NAME, build_all, build_family, skipped_phases  # noqa: E402
-from build_families import open_progress_log  # noqa: E402
+from build_families import open_progress_log, release_document  # noqa: E402
 from trunking.fake_revit import FakeRevit  # noqa: E402
 from trunking.model import build_model  # noqa: E402
 from trunking.report import build_summary_markdown  # noqa: E402
@@ -225,6 +225,43 @@ class TestCrashDiagnostics(unittest.TestCase):
                 close()
             self.assertIn("phase 2/8 single type", text)
             self.assertIn("solid Tray_Base", text)
+
+
+class TestDocumentRelease(unittest.TestCase):
+    """A closed document must not stay referenced: dead proxies crash Revit."""
+
+    class _Built(object):
+        def __init__(self):
+            self.document = object()
+
+    class _Report(object):
+        def __init__(self):
+            self.built = TestDocumentRelease._Built()
+
+    class _Revit(object):
+        def __init__(self):
+            self.closed = []
+
+        def close_family(self, document):
+            self.closed.append(document)
+
+    def test_document_is_closed_and_forgotten(self):
+        revit = self._Revit()
+        report = self._Report()
+        released = release_document(revit, report, keep_open=False)
+        self.assertTrue(released)
+        self.assertEqual(len(revit.closed), 1)
+        self.assertIsNone(report.built.document)
+
+    def test_keep_open_leaves_it_alone(self):
+        revit = self._Revit()
+        report = self._Report()
+        self.assertFalse(release_document(revit, report, keep_open=True))
+        self.assertEqual(revit.closed, [])
+        self.assertIsNotNone(report.built.document)
+
+    def test_report_without_a_document_is_harmless(self):
+        self.assertFalse(release_document(self._Revit(), type("R", (), {"built": None})()))
 
 
 if __name__ == "__main__":

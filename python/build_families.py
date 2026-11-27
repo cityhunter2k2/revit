@@ -14,6 +14,7 @@ the build logic itself is covered by tests:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -54,6 +55,26 @@ def get_app():
         return pyrevit_revit.doc.Application
     except Exception:  # noqa: BLE001
         return None
+
+
+def release_document(revit, report, keep_open: bool = False) -> bool:
+    """Close the family document and drop every proxy to it.
+
+    A closed Document, and each element in it, is a dead proxy. Keeping one
+    referenced lets the garbage collector finalise it at an arbitrary later
+    moment, and finalising a dead Revit proxy does not raise: it takes the
+    process down. The document reference is therefore cleared as soon as the
+    document is closed.
+    """
+    built = getattr(report, "built", None)
+    document = getattr(built, "document", None) if built is not None else None
+    if document is None:
+        return False
+    if keep_open:
+        return False
+    revit.close_family(document)
+    built.document = None
+    return True
 
 
 def open_progress_log(out_dir: str):
@@ -148,10 +169,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         emit(f"    {report.summary()}")
         if report.failures:
             emit(f"    FAILED: {len(report.failures)} step(s)")
-        document = getattr(report.built, "document", None)
-        if document is not None and not args.keep_open:
-            # close only after the save succeeded; an unsaved document is discarded
-            revit.close_family(document)
+        if release_document(revit, report, args.keep_open):
+            emit("    document closed, proxies released")
+            gc.collect()
 
     # ---- reports ------------------------------------------------------ #
     os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)
