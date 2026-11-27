@@ -1,0 +1,6 @@
+{
+  "name": "Trunking",
+  "description": "Parametric cable-trunking 90 degree elbow families (mitre / sharp, front / internal / external).",
+  "author": "revit-trunking",
+  "version": "1.0.0"
+}

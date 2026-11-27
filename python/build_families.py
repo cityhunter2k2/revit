@@ -31,22 +31,26 @@ from trunking.verify import verify_family  # noqa: E402
 
 
 def get_app():
-    """Find the Revit Application object in any of the supported hosts."""
-    try:
-        from pyrevit import revit as pyrevit_revit  # type: ignore
+    """Find the Revit Application object in any of the supported hosts.
 
-        return pyrevit_revit.doc.Application
+    pyRevit (CPython or IronPython), RevitPythonShell and plain pythonnet all
+    expose it differently; the first hit wins.
+    """
+    try:  # pyRevit >= 4.7
+        from pyrevit import HOST_APP  # type: ignore
+
+        app = getattr(HOST_APP, "app", None)
+        if app is not None:
+            return app
     except Exception:  # noqa: BLE001
         pass
     app = globals().get("__revit__")
     if app is not None:
         return app
-    try:
-        from Autodesk.Revit.ApplicationServices import Application  # type: ignore  # noqa: F401
+    try:  # pyRevit without HOST_APP, needs an open document
+        from pyrevit import revit as pyrevit_revit  # type: ignore
 
-        from revitron import Document  # type: ignore  # noqa: F401
-
-        return Document().doc.Application
+        return pyrevit_revit.doc.Application
     except Exception:  # noqa: BLE001
         return None
 
@@ -61,6 +65,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="use the in-memory fake Revit document")
     parser.add_argument("--report", default=os.path.join(os.path.dirname(here), "docs", "05-build-report.md"))
     parser.add_argument("--no-verify", action="store_true")
+    parser.add_argument("--keep-open", action="store_true", help="leave the built family documents open in Revit")
     args = parser.parse_args(argv)
 
     kinds = [KIND_BY_KEY[key.strip()] for key in args.only.split(",") if key.strip()] or list(FAMILY_KINDS)
@@ -106,6 +111,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"    {report.summary()}")
         if report.failures:
             print(f"    FAILED: {len(report.failures)} step(s)")
+        document = getattr(report.built, "document", None)
+        if document is not None and not args.keep_open:
+            # close only after the save succeeded; an unsaved document is discarded
+            revit.close_family(document)
 
     # ---- reports ------------------------------------------------------ #
     os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)

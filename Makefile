@@ -2,7 +2,7 @@
 PY := python3
 PYDIR := python
 
-.PHONY: help test verify preview dry-run build docs clean
+.PHONY: help test verify preview dry-run build icons docs clean
 
 help:
 	@echo "make test      - unit tests (model, dimplan, builder, fake Revit)"
@@ -10,6 +10,7 @@ help:
 	@echo "make preview   - render docs/preview/*.png"
 	@echo "make dry-run   - full build pipeline against the fake Revit document"
 	@echo "make build     - build the real .rfa files (run inside Revit, needs TEMPLATE=...)"
+	@echo "make icons     - redraw the pyRevit ribbon icons"
 	@echo "make clean     - remove generated build output"
 
 test:
@@ -28,6 +29,9 @@ dry-run:
 build:
 	cd $(PYDIR) && $(PY) build_families.py --out ../build/families \
 		--template "$(TEMPLATE)" --report ../docs/05-build-report.md
+
+icons:
+	$(PY) $(PYDIR)/make_icons.py
 
 clean:
 	rm -rf build

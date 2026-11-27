@@ -102,8 +102,13 @@ class RevitApi(api.RevitAdapter):
     def _import(self) -> None:
         import clr  # noqa: F401 - only importable inside Revit
 
-        clr.AddReference("RevitAPI")
-        clr.AddReference("RevitAPIUI")
+        # pyRevit's CPython engine needs the assemblies loaded explicitly;
+        # IronPython already has them referenced by the host application.
+        for assembly in ("RevitAPI", "RevitAPIUI", "RevitServices", "System"):
+            try:
+                clr.AddReference(assembly)
+            except Exception:  # noqa: BLE001 - already loaded is fine
+                pass
         import Autodesk.Revit.DB as DB
 
         self.DB = DB
@@ -118,9 +123,12 @@ class RevitApi(api.RevitAdapter):
 
     # -- document ---------------------------------------------------------- #
     def open_family_template(self, template_path: str, destination: str):
+        if not os.path.isfile(template_path):
+            raise RuntimeError("family template not found: %s" % template_path)
         doc = self.app.OpenDocumentFile(template_path)
         if doc is None:
-            raise RuntimeError(f"could not open {template_path}")
+            raise RuntimeError("Revit could not open %s" % template_path)
+        # a template opens untitled; SaveAs(destination) turns it into the .rfa
         return doc
 
     def save_family(self, doc, path: str) -> CapResult:

@@ -20,7 +20,7 @@
 ## 快速開始
 
 ```bash
-make test                      # 64 個單元測試（含建置流程、伸縮驗證）
+make test                      # 75 個單元測試（含建置流程、pyRevit 擴充、伸縮驗證）
 make verify                    # 6 族 × 41 項驗收檢查 × 11 種尺寸
 make preview                   # 產生 docs/preview/*.png
 make dry-run                   # 用假 Revit 文件跑完整建置流程
@@ -32,6 +32,20 @@ make dry-run                   # 用假 Revit 文件跑完整建置流程
 python build_families.py --out C:\BIM\Trunking --template "<...>\Metric Cable Tray Fitting.rft"
 python verify_families.py --families C:\BIM\Trunking     # 在 Revit 裡量測實體幾何
 ```
+
+### pyRevit 使用者
+
+repo 內附 pyRevit 擴充套件 `Trunking.extension`（Trunking 頁籤 → Build Families / Verify Families）：
+
+1. `pyRevit ▸ Settings ▸ Custom Extension Directories` 指向本 repo 根目錄 → `pyRevit ▸ Reload`。
+2. **必須使用 CPython 引擎（Python 3.6+）**，按鈕已寫 `#! python3`；pyRevit 5.x 內建、4.8.14+ 可切換。
+   IronPython 2.7 無法執行（dataclasses／型別註解），按鈕會跳視窗說明而不是報 SyntaxError。
+3. 細節、環境變數、疑難排解：[`docs/08-pyrevit.md`](docs/08-pyrevit.md)。
+
+| 引擎 | 結果 |
+|---|---|
+| CPython 3.6+ | ✅ Build / Verify 皆可 |
+| IronPython 2.7 | ❌ 改用 Revit 外的 CPython，或 C# Add-in |
 
 ## 這個 repo 的稽核結果（先查再寫）
 
@@ -75,7 +89,10 @@ python/
 │   └── pncanvas.py    無依賴的點陣圖 + PNG 輸出（預覽圖用）
 ├── build_families.py  CLI：建置六個族（Revit 內）或 --dry-run
 ├── verify_families.py CLI：--model-only（任何環境）/ --families（Revit 內實測）
-└── preview.py         CLI：輸出 8 張預覽圖
+├── preview.py         CLI：輸出 8 張預覽圖
+└── make_icons.py      CLI：重畫 pyRevit 功能區圖示
+
+Trunking.extension/    pyRevit 擴充套件（Trunking 頁籤，Build / Verify 兩個按鈕）
 ```
 
 **單一類型是硬性契約**：`build_model` 的 `FamilyModel.type_names` 只有 `("Standard",)`，
@@ -115,13 +132,16 @@ WallThickness            if(and(Width<=50,Height<=50), 1, 1.2~1.6 mm)  ← 見 d
 | [`docs/04-verification-report.md`](docs/04-verification-report.md) | 6 族 × 41 檢查 × 11 尺寸的驗證報告 |
 | [`docs/05-build-report.md`](docs/05-build-report.md) | 建置能力矩陣（每步 OK/FALLBACK/SKIPPED） |
 | [`docs/07-routing-preferences.md`](docs/07-routing-preferences.md) | 部署、Routing Preferences 設定、LOD、檢查清單 |
+| [`docs/08-pyrevit.md`](docs/08-pyrevit.md) | pyRevit 擴充套件安裝、引擎需求、疑難排解 |
 
 ## 已知限制
 
 1. **沙盒沒有 .NET SDK / 也無法執行 Revit**，所以本 repo 不含已編譯的 Add-in，也不含實體 `.rfa`：
    真正的 `.rfa` 由 `build_families.py` 在 Revit 內產生。程式的正確性由「模型 + 假 Revit 文件」
-   的 64 個測試與 246 項驗收檢查保證；API 層（`revit_api.py`）以 `_probe` 兼容不同版本，
+   的 75 個測試與 246 項驗收檢查保證；API 層（`revit_api.py`）以 `_probe` 兼容不同版本，
    失敗時降級並列出人工步驟，不會產生半成品族檔。
+4. **pyRevit 必須用 CPython 引擎**：`trunking` 套件使用 dataclasses／型別註解，IronPython 2.7
+   無法執行。擴充套件的按鈕會在 IronPython 下跳視窗說明（見 [`docs/08-pyrevit.md`](docs/08-pyrevit.md)）。
 2. **草圖尺寸的 API 支援依版本而異**：若 `SketchEditScope`/`Dimension.FamilyLabel` 不被允許，
    建置會標記 `FALLBACK` 並輸出 `docs/03-manual-labelling.md`（每族約 37–43 條），在族編輯器內
    照表標註即可，參數與公式都已經建好。
