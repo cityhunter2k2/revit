@@ -194,23 +194,35 @@ def _direction(a: Point2L, b: Point2L, values: Mapping[str, float]) -> Tuple[flo
 def offset_chain(
     chain: Sequence[Point2L], distance: float, values: Mapping[str, float]
 ) -> list[Point2L]:
-    """Symbolic equivalent of :func:`geometry.offset_chain` (left offset)."""
+    """Symbolic equivalent of :func:`geometry.offset_chain` (left offset).
+
+    Every segment contributes its own offset line; the vertices are where two
+    consecutive offset lines meet. Zipping ``chain`` with the segment directions
+    instead drops the last vertex and miter-joins the wrong pair, which is how
+    the wall strips ended up as bow-ties.
+    """
     if len(chain) < 2:
         raise ValueError("a chain needs at least two points")
     dirs = [_direction(a, b, values) for a, b in zip(chain[:-1], chain[1:])]
-    offsets = [(p[0] - d[1] * distance, p[1] + d[0] * distance) for p, d in zip(chain, dirs)]
 
-    out: list[Point2L] = [offsets[0]]
-    for i in range(1, len(dirs)):
-        d1, d2 = dirs[i - 1], dirs[i]
+    def offset_point(point: Point2L, direction: Tuple[float, float]) -> Point2L:
+        return (point[0] - direction[1] * distance, point[1] + direction[0] * distance)
+
+    lines = [(offset_point(chain[i], dirs[i]), dirs[i]) for i in range(len(dirs))]
+    out: list[Point2L] = [lines[0][0]]
+    for index in range(1, len(lines)):
+        (p1, d1), (p2, d2) = lines[index - 1], lines[index]
         det = d1[0] * d2[1] - d1[1] * d2[0]
-        if abs(det) < 1e-9:
-            out.append(offsets[i])
+        if abs(det) < 1e-9:  # parallel: the offset line continues straight
+            out.append(p2)
             continue
-        delta = p2_sub(offsets[i], offsets[i - 1])
+        delta = p2_sub(p2, p1)
         t = (delta[0] * d2[1] - delta[1] * d2[0]) / det
-        out.append((offsets[i - 1][0] + d1[0] * t, offsets[i - 1][1] + d1[1] * t))
-    out.append(offsets[-1])
+        out.append((p1[0] + d1[0] * t, p1[1] + d1[1] * t))
+    # the end vertex is the last offset start plus the whole last segment
+    last_offset = lines[-1][0]
+    start, end = chain[-2], chain[-1]
+    out.append((last_offset[0] + (end[0] - start[0]), last_offset[1] + (end[1] - start[1])))
     return out
 
 

@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trunking import geometry
 from trunking.geometry import (  # noqa: E402
     FRAME_XY,
     elbow_outline,
@@ -76,6 +77,46 @@ class TestSilhouette(unittest.TestCase):
         values = {}
         offset = offset_chain(chain, Lin.const(10), values)
         self.assertEqual([p[1].k for p in offset], [10, 10])
+
+    def test_symbolic_offset_matches_the_numeric_kernel(self):
+        """The symbolic offsets must agree with geometry.offset_chain exactly."""
+        chains = (
+            [(-125.0, -50.0), (50.0, -50.0), (50.0, 125.0)],
+            [(-50.0, 125.0), (-50.0, 50.0), (-125.0, 50.0)],
+            [(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)],
+        )
+        for chain in chains:
+            symbolic = [p2(u, v) for u, v in chain]
+            got = [p2_eval(point, {}) for point in offset_chain(symbolic, Lin.const(1.2), {})]
+            want = geometry.offset_chain(chain, 1.2)
+            self.assertEqual(len(got), len(want), chain)
+            for actual, expected in zip(got, want):
+                self.assertAlmostEqual(actual[0], expected[0], places=6)
+                self.assertAlmostEqual(actual[1], expected[1], places=6)
+
+    def test_wall_strip_is_a_simple_polygon(self):
+        """The strip used to come back as a bow-tie: 4th point on the 1st edge."""
+        chain = [p2(-125, -50), p2(50, -50), p2(50, 125)]
+        strip = chain_strip(chain, Lin.const(1.2), {})
+        points = [p2_eval(point, {}) for point in strip]
+        self.assertEqual(len(points), 6)
+        self.assertFalse(polygon_self_intersects(points))
+
+    def test_a_vertex_lying_on_another_edge_is_not_simple(self):
+        """This is the exact bow-tie the offset bug produced."""
+        bowtie = [
+            (-125.0, -50.0),
+            (50.0, -50.0),
+            (50.0, 125.0),
+            (48.8, -50.0),
+            (48.8, -48.8),
+            (-125.0, -48.8),
+        ]
+        self.assertTrue(polygon_self_intersects(bowtie))
+
+    def test_collinear_vertices_are_still_simple(self):
+        with_collinear = [(0.0, 0.0), (5.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        self.assertFalse(polygon_self_intersects(with_collinear))
 
 
 class TestPrisms(unittest.TestCase):

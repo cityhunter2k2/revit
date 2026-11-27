@@ -16,8 +16,10 @@
 | `Tray_Wall_Outer` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Wall_Outer` | 0 | u | `Span_Half_Minus_Wall` | 48.80 |
 | `Tray_Wall_Outer` | 0 | v | `WallThickness` | 1.20 |
+| `Tray_Wall_Outer` | 0 | v | `Span_Outer_Minus_Wall` | 173.80 |
 | `Tray_Wall_Outer` | 0 | v | `Span_Half_Minus_Wall` | 48.80 |
 | `Tray_Wall_Outer` | 0 | diag | `WallThickness` | 1.20 |
+| `Tray_Wall_Inner` | 0 | u | `Mitre_Leg` | 75.00 |
 | `Tray_Wall_Inner` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Wall_Inner` | 0 | u | `Span_Half_Minus_Wall` | 48.80 |
 | `Tray_Wall_Inner` | 0 | v | `WallThickness` | 1.20 |
@@ -66,8 +68,10 @@
 | `Tray_Base` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Base` | 0 | u | `Span_Half_Minus_Wall` | 23.80 |
 | `Tray_Base` | 0 | v | `WallThickness` | 1.20 |
+| `Tray_Base` | 0 | v | `Span_Outer_Minus_Wall` | 123.80 |
 | `Tray_Base` | 0 | v | `Span_Half_Minus_Wall` | 23.80 |
 | `Tray_Base` | 0 | diag | `WallThickness` | 1.20 |
+| `Cover` | 0 | u | `Span_Inner_Minus_CoverThk` | 73.80 |
 | `Cover` | 0 | u | `Cover_Thickness` | 1.20 |
 | `Cover` | 0 | u | `Arm_Half` | 25.00 |
 | `Cover` | 0 | v | `Cover_Thickness` | 1.20 |
@@ -106,6 +110,7 @@
 | `Wall_Far` | 0 | v | `Height` | 50.00 |
 | `Wall_Far` | 0 | v | `Mitre_Leg` | 75.00 |
 | `Wall_Far` | 0 | v | `Arm_Half` | 25.00 |
+| `Tray_Base` | 0 | u | `Mitre_Leg` | 75.00 |
 | `Tray_Base` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Base` | 0 | u | `Span_Half_Minus_Wall` | 23.80 |
 | `Tray_Base` | 0 | v | `WallThickness` | 1.20 |
@@ -115,6 +120,7 @@
 | `Cover` | 0 | u | `Cover_Thickness` | 1.20 |
 | `Cover` | 0 | u | `Arm_Half` | 25.00 |
 | `Cover` | 0 | v | `Cover_Thickness` | 1.20 |
+| `Cover` | 0 | v | `Outer_Edge_DE` | 125.00 |
 | `Cover` | 0 | v | `Arm_Half` | 25.00 |
 | `Cover` | 0 | diag | `Cover_Thickness` | 1.20 |
 | `Flange_Port_A` | 0 | u | `Flange_Outer_Width_Y` | 103.60 |
@@ -148,7 +154,9 @@
 | `Tray_Wall_Outer` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Wall_Outer` | 0 | u | `Span_Half_Minus_Wall` | 48.80 |
 | `Tray_Wall_Outer` | 0 | v | `WallThickness` | 1.20 |
+| `Tray_Wall_Outer` | 0 | v | `Span_Outer_Minus_Wall` | 173.80 |
 | `Tray_Wall_Outer` | 0 | v | `Span_Half_Minus_Wall` | 48.80 |
+| `Tray_Wall_Inner` | 0 | u | `Stub` | 75.00 |
 | `Tray_Wall_Inner` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Wall_Inner` | 0 | u | `Span_Half_Minus_Wall` | 48.80 |
 | `Tray_Wall_Inner` | 0 | v | `WallThickness` | 1.20 |
@@ -197,7 +205,9 @@
 | `Tray_Base` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Base` | 0 | u | `Span_Half_Minus_Wall` | 23.80 |
 | `Tray_Base` | 0 | v | `WallThickness` | 1.20 |
+| `Tray_Base` | 0 | v | `Span_Outer_Minus_Wall` | 123.80 |
 | `Tray_Base` | 0 | v | `Span_Half_Minus_Wall` | 23.80 |
+| `Cover` | 0 | u | `Span_Inner_Minus_CoverThk` | 73.80 |
 | `Cover` | 0 | u | `Cover_Thickness` | 1.20 |
 | `Cover` | 0 | u | `Arm_Half` | 25.00 |
 | `Cover` | 0 | v | `Cover_Thickness` | 1.20 |
@@ -236,6 +246,7 @@
 | `Wall_Far` | 0 | v | `Height` | 50.00 |
 | `Wall_Far` | 0 | v | `Stub` | 75.00 |
 | `Wall_Far` | 0 | v | `Arm_Half` | 25.00 |
+| `Tray_Base` | 0 | u | `Stub` | 75.00 |
 | `Tray_Base` | 0 | u | `WallThickness` | 1.20 |
 | `Tray_Base` | 0 | u | `Span_Half_Minus_Wall` | 23.80 |
 | `Tray_Base` | 0 | v | `WallThickness` | 1.20 |
@@ -245,6 +256,7 @@
 | `Cover` | 0 | u | `Cover_Thickness` | 1.20 |
 | `Cover` | 0 | u | `Arm_Half` | 25.00 |
 | `Cover` | 0 | v | `Cover_Thickness` | 1.20 |
+| `Cover` | 0 | v | `Outer_Edge_DE` | 125.00 |
 | `Cover` | 0 | v | `Arm_Half` | 25.00 |
 | `Flange_Port_A` | 0 | u | `Flange_Outer_Width_Y` | 103.60 |
 | `Flange_Port_A` | 0 | u | `Flange_Outer_Half_Width_Y` | 51.80 |

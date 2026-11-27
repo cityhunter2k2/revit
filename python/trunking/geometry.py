@@ -116,16 +116,27 @@ def point_in_polygon(point: Point2, polygon: Sequence[Point2]) -> bool:
     return inside
 
 
-def _segments_cross(a: Point2, b: Point2, c: Point2, d: Point2) -> bool:
-    def orient(p: Point2, q: Point2, r: Point2) -> float:
-        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+def _orient(p: Point2, q: Point2, r: Point2) -> float:
+    return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
 
-    o1, o2 = orient(a, b, c), orient(a, b, d)
-    o3, o4 = orient(c, d, a), orient(c, d, b)
-    if (o1 > EPS and o2 < -EPS) or (o1 < -EPS and o2 > EPS):
-        if (o3 > EPS and o4 < -EPS) or (o3 < -EPS and o4 > EPS):
-            return True
-    return False
+
+def _segments_cross(a: Point2, b: Point2, c: Point2, d: Point2) -> bool:
+    """True when two segments cross *or touch*.
+
+    A strictly-proper test (both orientations strictly positive/negative) misses
+    the common degenerate case where a vertex lands exactly on another edge: the
+    offset bug produced strips whose fourth point sat on the first edge, the
+    orientation came out 0, and every profile check reported "clean" while Revit
+    refused to extrude with "Unexpected internal error".
+    """
+
+    def side(p: Point2, q: Point2, r: Point2) -> int:
+        value = _orient(p, q, r)
+        return 1 if value > EPS else (-1 if value < -EPS else 0)
+
+    o1, o2 = side(a, b, c), side(a, b, d)
+    o3, o4 = side(c, d, a), side(c, d, b)
+    return o1 != o2 and o3 != o4
 
 
 def polygon_self_intersects(points: Sequence[Point2]) -> bool:

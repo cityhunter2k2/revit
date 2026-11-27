@@ -1,6 +1,6 @@
 # 電纜線槽彎頭族 — 單一族類型全尺寸驗證報告
 
-產生時間：2026-11-27 11:58
+產生時間：2026-11-27 21:21
 
 ## 總覽
 
@@ -127,9 +127,9 @@
 
 ### 草圖約束
 
-共 **39** 個具參數標籤的草圖尺寸；自動衍生參數 9 個；斜切邊保留 5 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **41** 個具參數標籤的草圖尺寸；自動衍生參數 9 個；斜切邊保留 3 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Tray_Wall_Inner×5, Tray_Wall_Outer×6
+分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Tray_Wall_Inner×6, Tray_Wall_Outer×7
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -187,10 +187,10 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 39 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 41 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 1.421e-14 mm (Cover[0].u 300x100) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 5 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 3 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on top, base on bottom |
 
 ## Trunking_90_MitreBend_InternalOpening.rfa — ✅ PASS
@@ -259,9 +259,9 @@
 
 ### 草圖約束
 
-共 **39** 個具參數標籤的草圖尺寸；自動衍生參數 7 個；斜切邊保留 5 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **41** 個具參數標籤的草圖尺寸；自動衍生參數 7 個；斜切邊保留 3 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×5, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Wall_Far×6, Wall_Near×6
+分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×7, Wall_Far×6, Wall_Near×6
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -319,10 +319,10 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 39 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 41 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 1.288e-14 mm (Tray_Base[0].diag 100x100) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 5 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 3 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on concave, base on convex |
 
 ## Trunking_90_MitreBend_ExternalOpening.rfa — ✅ PASS
@@ -389,9 +389,9 @@
 
 ### 草圖約束
 
-共 **39** 個具參數標籤的草圖尺寸；自動衍生參數 5 個；斜切邊保留 5 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **41** 個具參數標籤的草圖尺寸；自動衍生參數 5 個；斜切邊保留 3 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×5, Wall_Far×6, Wall_Near×6
+分佈：Cover×7, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Wall_Far×6, Wall_Near×6
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -449,10 +449,10 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 39 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 41 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 9.992e-15 mm (Cover[0].diag 75x50) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 5 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 3 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on convex, base on concave |
 
 ## Trunking_90_SharpBend_FrontOpening.rfa — ✅ PASS
@@ -519,9 +519,9 @@
 
 ### 草圖約束
 
-共 **38** 個具參數標籤的草圖尺寸；自動衍生參數 9 個；斜切邊保留 2 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **40** 個具參數標籤的草圖尺寸；自動衍生參數 9 個；斜切邊保留 0 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Tray_Wall_Inner×5, Tray_Wall_Outer×5
+分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Tray_Wall_Inner×6, Tray_Wall_Outer×6
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -579,10 +579,10 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 38 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 40 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 1.421e-14 mm (Cover[0].u 300x100) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 2 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 0 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on top, base on bottom |
 
 ## Trunking_90_SharpBend_InternalOpening.rfa — ✅ PASS
@@ -649,9 +649,9 @@
 
 ### 草圖約束
 
-共 **38** 個具參數標籤的草圖尺寸；自動衍生參數 7 個；斜切邊保留 2 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **40** 個具參數標籤的草圖尺寸；自動衍生參數 7 個；斜切邊保留 0 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×5, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×5, Wall_Far×6, Wall_Near×6
+分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Wall_Far×6, Wall_Near×6
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -709,10 +709,10 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 38 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 40 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 5.773e-15 mm (Tray_Base[0].u 150x150) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 2 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 0 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on concave, base on convex |
 
 ## Trunking_90_SharpBend_ExternalOpening.rfa — ✅ PASS
@@ -777,9 +777,9 @@
 
 ### 草圖約束
 
-共 **38** 個具參數標籤的草圖尺寸；自動衍生參數 5 個；斜切邊保留 2 個自由自由度（角度與邊長由相鄰受控線自然維持）。
+共 **40** 個具參數標籤的草圖尺寸；自動衍生參數 5 個；斜切邊保留 0 個自由自由度（角度與邊長由相鄰受控線自然維持）。
 
-分佈：Cover×5, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×5, Wall_Far×6, Wall_Near×6
+分佈：Cover×6, Flange_Port_A×8, Flange_Port_B×8, Tray_Base×6, Wall_Far×6, Wall_Near×6
 
 ### 尺寸驗證（單一族類型，逐一 Flex）
 
@@ -837,8 +837,8 @@
 | `connectors_200x200` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_300x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
 | `connectors_50x100` | api | ✅ PASS | Port_A: originok sizeok normalok; Port_B: originok sizeok normalok |
-| `dim_plan_labels` | parametric | ✅ PASS | 38 labelled dimensions; all labels resolve |
+| `dim_plan_labels` | parametric | ✅ PASS | 40 labelled dimensions; all labels resolve |
 | `dim_plan_exact` | parametric | ✅ PASS | max |measured - parameter| = 5.773e-15 mm (Tray_Base[0].u 150x150) |
 | `dim_plan_anchored` | parametric | ✅ PASS | all profile lines driven by labelled dimensions |
-| `dim_plan_free_diagonals` | parametric | ✅ PASS | 2 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
+| `dim_plan_free_diagonals` | parametric | ✅ PASS | 0 chamfer lines keep one redundant-free DOF (the 45 deg angle and leg length are preserved by the solver; see docs/02) |
 | `cover_and_base_sides` | catalogue | ✅ PASS | cover on convex, base on concave |
