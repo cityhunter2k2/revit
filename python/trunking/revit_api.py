@@ -239,31 +239,29 @@ class RevitApi(api.RevitAdapter):
 
         ``Metric Cable Tray Fitting.rft`` ships three types; the design is a
         single flexing type, so the extras are deleted instead of refusing the
-        build.
+        build. A deleted FamilyType is a dead proxy: its Name has to be read
+        *before* DeleteCurrentType, never after.
         """
         manager = doc.FamilyManager
-        total = int(manager.Types.Size)
-        if total == 0:
-            return api.failed("the template holds no type at all")
         dropped = []
-        while int(manager.Types.Size) > 1:
-            current = manager.CurrentType
-            try:
-                manager.DeleteCurrentType()
-            except Exception as exc:  # noqa: BLE001
-                return api.failed(
-                    f"could not delete type {getattr(current, 'Name', '?')}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-            dropped.append(getattr(current, "Name", "?"))
-            remaining = list(manager.Types)
-            if not remaining:
-                return api.failed("deleting the extra types left no type behind")
-            manager.CurrentType = remaining[0]
         try:
+            total = int(manager.Types.Size)
+            if total == 0:
+                return api.failed("the template holds no type at all")
+            while int(manager.Types.Size) > 1:
+                if len(dropped) >= total:
+                    return api.failed("Revit kept reporting extra types after deleting them")
+                current = manager.CurrentType
+                label = str(current.Name)
+                manager.DeleteCurrentType()
+                dropped.append(label)
+                remaining = list(manager.Types)
+                if not remaining:
+                    return api.failed("deleting the extra types left no type behind")
+                manager.CurrentType = remaining[0]
             if manager.CurrentType.Name != name:
                 manager.RenameCurrentType(name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - a type change must not kill the build
             return api.failed(f"{type(exc).__name__}: {exc}")
         if dropped:
             return api.ok(f"deleted {len(dropped)} template type(s) and kept '{name}'")

@@ -367,6 +367,92 @@ class TestMaterialHandling(unittest.TestCase):
         self.assertIn("Galvanised Steel", result.message)
 
 
+class _FamilyType(object):
+    """A FamilyType whose Name dies with it, like the Revit proxy does."""
+
+    def __init__(self, name):
+        self._name = name
+        self.deleted = False
+
+    @property
+    def Name(self):
+        if self.deleted:
+            raise RuntimeError("The family type does not exist in current document.")
+        return self._name
+
+
+class _TypeSet(object):
+    def __init__(self, manager):
+        self._manager = manager
+
+    @property
+    def Size(self):
+        return len(self._manager.types)
+
+    def __iter__(self):
+        return iter(list(self._manager.types))
+
+
+class _TypeManager(object):
+    def __init__(self, names, fail_delete=False):
+        self.types = [_FamilyType(name) for name in names]
+        self.current = self.types[0] if self.types else None
+        self.Types = _TypeSet(self)
+        self.renamed = []
+        self.fail_delete = fail_delete
+
+    @property
+    def CurrentType(self):
+        return self.current
+
+    @CurrentType.setter
+    def CurrentType(self, value):
+        self.current = value
+
+    def DeleteCurrentType(self):
+        if self.fail_delete:
+            raise RuntimeError("delete refused")
+        victim = self.current
+        victim.deleted = True
+        self.types.remove(victim)
+
+    def RenameCurrentType(self, name):
+        self.renamed.append(name)
+
+
+def _type_doc(manager):
+    return type("_Doc", (), {"FamilyManager": manager})()
+
+
+class TestSingleType(unittest.TestCase):
+    """The template ships three types; the delivered family has exactly one."""
+
+    def test_reduces_three_types_to_one(self):
+        manager = _TypeManager(["A", "B", "C"])
+        result = _api().ensure_single_type(_type_doc(manager), "Standard")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(len(manager.types), 1)
+        self.assertEqual(manager.renamed, ["Standard"])
+
+    def test_reads_the_name_before_deleting_the_type(self):
+        # _FamilyType.Name raises once the type is deleted, so this only passes
+        # when the label is captured first.
+        manager = _TypeManager(["A", "B"])
+        result = _api().ensure_single_type(_type_doc(manager), "Standard")
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("1 template type", result.message)
+
+    def test_no_types_is_a_failure(self):
+        result = _api().ensure_single_type(_type_doc(_TypeManager([])), "Standard")
+        self.assertTrue(result.failed, result.message)
+
+    def test_a_refused_delete_is_reported_not_raised(self):
+        manager = _TypeManager(["A", "B"], fail_delete=True)
+        result = _api().ensure_single_type(_type_doc(manager), "Standard")
+        self.assertTrue(result.failed, result.message)
+        self.assertIn("delete refused", result.message)
+
+
 class TestNoRemovedMembers(unittest.TestCase):
     def test_sources_do_not_use_element_id_integer_value(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
