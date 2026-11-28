@@ -107,10 +107,38 @@ from Autodesk.Revit.DB import (
     XYZ,
 )
 
-from pyrevit import revit, forms, script
+from pyrevit import revit, script
 
 logger = script.get_logger()
 output = script.get_output()
+
+
+def _alert(message, title='Trunking bends'):
+    """Report without pyRevit dialogs.
+
+    On the CPython engine pyrevit.forms is a stub backend: pick_folder,
+    pick_file and alert all raise PyRevitCPythonNotSupported. Messages go to
+    the output window and the log instead.
+    """
+    try:
+        logger.info(u'[{0}] {1}'.format(title, message))
+    except Exception:
+        pass
+    try:
+        output.print_md(u'**{0}**'.format(title))
+        output.print_md(u'{0}'.format(message))
+    except Exception:
+        print(u'{0}: {1}'.format(title, message))
+
+
+def _output_folder():
+    """TRUNKING_OUT, else Documents\\Trunking\\families (no folder dialog)."""
+    folder = os.environ.get('TRUNKING_OUT')
+    if not folder:
+        folder = os.path.join(os.path.expanduser('~'), 'Documents', 'Trunking', 'families')
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    return folder
 
 # =====================================================================================
 #  CONSTANTS
@@ -1191,12 +1219,14 @@ def find_template(app):
         candidates.sort(key=lambda c: c[0])
         return candidates[0][1]
 
-    forms.alert(u'找不到公制電纜橋架管件樣板（Metric Cable Tray Fitting.rft）。\n'
-                u'請手動選擇 Revit 2027 的電纜架配件族樣板 (.rft)。', title='Family template')
-    picked = forms.pick_file(file_ext='rft', title='Select Metric Cable Tray Fitting.rft')
-    if not picked:
-        forms.alert(u'未選擇族樣板，腳本結束。', exitscript=True)
-    return picked
+    override = os.environ.get('TRUNKING_TEMPLATE')
+    if override and os.path.isfile(override):
+        return override
+    _alert(u'找不到公制電纜橋架管件樣板（Metric Cable Tray Fitting.rft）。\n'
+           u'CPython 引擎不支援檔案選擇對話框，請把 TRUNKING_TEMPLATE 設成 .rft 的完整路徑，'
+           u'例如 C:\\ProgramData\\Autodesk\\RVT 2027\\Family Templates\\Traditional Chinese\\'
+           u'Metric Cable Tray Fitting.rft', title='Family template')
+    raise Exception('family template not found: set TRUNKING_TEMPLATE')
 
 
 def load_into_project(project_doc, path):
@@ -1248,9 +1278,8 @@ def main():
     template = find_template(app)
     output.print_md(u'Template: `{0}`'.format(template))
 
-    out_dir = forms.pick_folder(title=u'選擇 .rfa 輸出資料夾 / Select output folder for the 2 families')
-    if not out_dir:
-        forms.alert(u'未選擇輸出資料夾，腳本結束。', exitscript=True)
+    out_dir = _output_folder()
+    output.print_md(u'Output: `{0}`'.format(out_dir))
 
     builders = []
     for spec in FAMILY_SPECS:
@@ -1296,27 +1325,31 @@ def main():
         msg += u'失敗: ' + ', '.join(b.spec['file'] for b in failed) + u'\n'
 
     if not saved:
-        forms.alert(msg + u'\n沒有可載入的族，請查看輸出視窗。', title='Trunking bends')
+        _alert(msg + u'\n沒有可載入的族，請查看輸出視窗。', title='Trunking bends')
         return
 
     if project_doc is None or project_doc.IsFamilyDocument:
-        forms.alert(msg + u'\n目前沒有開啟的專案文件，請手動載入 .rfa。', title='Trunking bends')
+        _alert(msg + u'\n目前沒有開啟的專案文件，請手動載入 .rfa。', title='Trunking bends')
         return
 
-    if forms.alert(msg + u'\n是否立即載入目前開啟的 Revit 專案「{0}」？'.format(project_doc.Title),
-                   title='Load families', yes=True, no=True):
-        load_rows = []
-        for b in saved:
-            try:
-                loaded, family, symbols = load_into_project(project_doc, b.saved_path)
-                load_rows.append([os.path.basename(b.saved_path), 'yes' if loaded else 'already loaded / skipped',
-                                  str(family.Id.Value) if family is not None else '-', str(symbols)])
-            except Exception as ex:
-                load_rows.append([os.path.basename(b.saved_path), 'ERROR: {0}'.format(ex), '-', '-'])
-        output.print_table(table_data=load_rows, title='Loaded into ' + project_doc.Title,
-                           columns=['Family', 'Loaded', 'Family Id (Int64)', 'Types'])
-        forms.alert(u'載入完成。請於「電纜架類型 > 佈線首選項 > 水平彎頭」指定此族（唯一類型 Standard）。',
-                    title='Done')
+    if os.environ.get('TRUNKING_LOAD') != '1':
+        _alert(msg + u'\n已存檔，未自動載入專案。'
+                     u'\n（CPython 引擎不支援詢問對話框；設 TRUNKING_LOAD=1 可自動載入）',
+               title='Trunking bends')
+        return
+
+    load_rows = []
+    for b in saved:
+        try:
+            loaded, family, symbols = load_into_project(project_doc, b.saved_path)
+            load_rows.append([os.path.basename(b.saved_path), 'yes' if loaded else 'already loaded / skipped',
+                              str(family.Id.Value) if family is not None else '-', str(symbols)])
+        except Exception as ex:
+            load_rows.append([os.path.basename(b.saved_path), 'ERROR: {0}'.format(ex), '-', '-'])
+    output.print_table(table_data=load_rows, title='Loaded into ' + project_doc.Title,
+                       columns=['Family', 'Loaded', 'Family Id (Int64)', 'Types'])
+    _alert(u'載入完成。請於「電纜架類型 > 佈線首選項 > 水平彎頭」指定此族（唯一類型 Standard）。',
+           title='Done')
 
 
 if __name__ == '__main__':
