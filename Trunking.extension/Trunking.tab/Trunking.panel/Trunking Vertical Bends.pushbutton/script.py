@@ -979,6 +979,11 @@ class Builder(object):
         self.doc.Regenerate()
         return ok
 
+    def views_all(self):
+        # a radial or diameter dimension only succeeds in a view whose direction
+        # is parallel to the sketch plane normal, so every view is offered
+        return self.plan_views + self.front_views + self.side_views
+
     def find_sketch_arc(self, ext, center):
         try:
             ids = ext.Sketch.GetAllElements()
@@ -1087,7 +1092,7 @@ class Builder(object):
             ctr = (cx, y0, cz)
             self.align_center(ext, ctr, xk, self.front_views, tag)
             self.align_center(ext, ctr, zk, self.front_views, tag)
-            self.label_diameter(ext, ctr, 'Hole_Diameter', self.front_views)
+            self.label_diameter(ext, ctr, 'Hole_Diameter', self.views_all())
         return ext
 
     def build_screw(self, fd):
@@ -1106,7 +1111,7 @@ class Builder(object):
         side_views = self.plan_views + self.side_views
         self.align_center(ext, center, c['xkey'], self.front_views, 'screw')
         self.align_center(ext, center, c['ykey'], side_views, 'screw')
-        self.label_diameter(ext, center, 'Screw_Diameter', self.front_views + side_views)
+        self.label_diameter(ext, center, 'Screw_Diameter', self.views_all())
         return ext
 
     def build_forms(self):
@@ -1301,7 +1306,8 @@ class Builder(object):
                 hit = [a for a in arcs if abs(a[0] - hx) < TOL_MM and abs(a[2] - hz) < TOL_MM]
                 if not hit:
                     res['holes'] = False
-                    res['msg'].append('hole centre (%.1f, %.1f) missing' % (hx, hz))
+                    seen = ' '.join('(%.1f,%.1f)' % (a[0], a[2]) for a in arcs[:4]) or 'none'
+                    res['msg'].append('hole (%.1f, %.1f) missing; arcs at %s' % (hx, hz, seen))
                     continue
                 if abs(hit[0][3] - r) > 0.2:
                     res['holes'] = False
@@ -1323,10 +1329,17 @@ class Builder(object):
         for i, (fd, ext) in enumerate(screw_forms):
             tgt = exp_screws[i]
             arcs = self.arcs_of(ext)
-            if not arcs or max(abs(arcs[0][0] - tgt[0]), abs(arcs[0][1] - tgt[1]),
-                               abs(arcs[0][2] - tgt[2])) > TOL_MM:
+            got = (arcs[0][0], arcs[0][1], arcs[0][2]) if arcs else None
+            drift = None if got is None else max(abs(got[0] - tgt[0]), abs(got[1] - tgt[1]),
+                                                 abs(got[2] - tgt[2]))
+            if drift is None or drift > TOL_MM:
                 res['screws'] = False
-                res['msg'].append('screw %d off position' % (i + 1))
+                if got is None:
+                    res['msg'].append('screw %d: no arc in the sketch' % (i + 1))
+                else:
+                    res['msg'].append('screw %d at (%.1f, %.1f, %.1f) expected (%.1f, %.1f, %.1f)'
+                                      % (i + 1, got[0], got[1], got[2],
+                                         tgt[0], tgt[1], tgt[2]))
 
         # connectors: origin, outward normal, Width axis = Y
         for conn, (org, nrm) in zip(self.conns, exp['connectors']):
@@ -1336,7 +1349,10 @@ class Builder(object):
             d_n = cs.BasisZ.X * nrm[0] + cs.BasisZ.Y * nrm[1] + cs.BasisZ.Z * nrm[2]
             if d_o > TOL_MM or d_n < 0.999 or abs(cs.BasisX.Y) < 0.999:
                 res['conn'] = False
-                res['msg'].append('connector origin/axis off (d=%.2f, n=%.3f)' % (d_o, d_n))
+                res['msg'].append('connector at (%.1f, %.1f, %.1f) expected (%.1f, %.1f, %.1f) '
+                                  'd=%.2f n=%.3f'
+                                  % (to_mm(o.X), to_mm(o.Y), to_mm(o.Z),
+                                     org[0], org[1], org[2], d_o, d_n))
         return res
 
     def flex_all(self):
