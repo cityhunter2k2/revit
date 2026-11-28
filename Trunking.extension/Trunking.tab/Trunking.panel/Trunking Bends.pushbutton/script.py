@@ -387,6 +387,8 @@ class BendFamilyBuilder(object):
         self.host_plates = []
         self.conn1 = None
         self.conn2 = None
+        self.part_type_name = 'unknown'
+        self.part_type_value = None
 
         # design values (mm) used while drawing at the default size 100 x 100
         self.W = DEFAULT_W
@@ -441,6 +443,25 @@ class BendFamilyBuilder(object):
         self.stats['warnings'].append(text)
         logger.warning('[{0}] {1}'.format(self.spec['file'], text))
 
+    def _resolve_part_type(self):
+        """Pick the cable tray elbow part type this Revit exposes.
+
+        TRUNKING_PART_TYPE overrides it (e.g. LadderCableTrayElbow for ladder
+        trays); the channel variant comes first because that is the tray type
+        these bends are drawn for.
+        """
+        candidates = []
+        override = os.environ.get('TRUNKING_PART_TYPE')
+        if override:
+            candidates.append(override)
+        candidates += ['ChannelCableTrayElbow', 'LadderCableTrayElbow',
+                       'CableTrayElbow', 'ChannelCableTrayVerticalElbow', 'Elbow']
+        for name in candidates:
+            value = getattr(PartType, name, None)
+            if value is not None:
+                return name, value
+        return 'unknown', None
+
     def _record_routing_data(self):
         """Record what Routing Preferences looks at: category, part type, connectors.
 
@@ -454,21 +475,23 @@ class BendFamilyBuilder(object):
             self.stats['category'] = str(category.Name) if category is not None else 'none'
         except Exception:
             self.stats['category'] = '?'
-        value, elbow = -1, None
+        value = -1
         try:
             parameter = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
             if parameter is not None:
                 value = parameter.AsInteger()
         except Exception:
             pass
+        expected = None
         try:
-            elbow = int(PartType.Elbow)
+            expected = int(self.part_type_value)
         except Exception:
             pass
-        if elbow is not None and value == elbow:
-            self.stats['part_type'] = 'Elbow'
+        if expected is not None and value == expected:
+            self.stats['part_type'] = str(self.part_type_name)
         else:
-            self.stats['part_type'] = 'value {0} (Elbow = {1})'.format(value, elbow)
+            self.stats['part_type'] = 'value {0} (wanted {1} = {2})'.format(
+                value, self.part_type_name, expected)
 
     def _collapse_to_one_type(self):
         """Delete every family type except the one named "Standard".
@@ -503,20 +526,22 @@ class BendFamilyBuilder(object):
                 family.FamilyCategory = cat
 
         # Part Type = Elbow is what puts the family under "Horizontal Bend" in
-        # Routing Preferences. The FAMILY_CONTENT_PART_TYPE parameter is
-        # read-only in the 2027 fitting templates; the Family property is the
-        # route that works there.
+        # Routing Preferences - but for Cable Tray Fittings the generic Elbow is
+        # not that value: the tray variants are ChannelCableTrayElbow /
+        # LadderCableTrayElbow. The generic one leaves the family unclassified,
+        # which is why it never showed up in the list.
+        self.part_type_name, self.part_type_value = self._resolve_part_type()
         part_type = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
         set_ok = False
         if part_type is not None and not part_type.IsReadOnly:
             try:
-                part_type.Set(int(PartType.Elbow))
+                part_type.Set(int(self.part_type_value))
                 set_ok = True
             except Exception as ex:
                 self._warn('Part Type via FAMILY_CONTENT_PART_TYPE failed: {0}'.format(ex))
         if not set_ok:
             try:
-                family.FamilyContentPartType = PartType.Elbow
+                family.FamilyContentPartType = self.part_type_value
                 set_ok = True
             except Exception as ex:
                 self._warn('Part Type could not be set (FamilyContentPartType): {0}'.format(ex))
@@ -1452,7 +1477,13 @@ def main():
     failed = [b for b in builders if b.error]
     log_path = os.path.join(out_dir, 'bends-build.log')
     try:
-        handle = open(log_path, 'w')
+        # the default codec on a zh-TW machine is cp950 and cannot encode the
+        # family names or 電纜橋架配件, which made the whole log write fail
+        try:
+            import io
+            handle = io.open(log_path, 'w', encoding='utf-8', errors='replace')
+        except Exception:
+            handle = open(log_path, 'w')
         try:
             handle.write(u'Revit {0} build {1}\n'.format(app.VersionNumber, app.VersionBuild))
             handle.write(u'template: {0}\n'.format(template))
