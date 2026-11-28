@@ -1036,14 +1036,14 @@ def build_profile(ctx, name, frame, host, loops, rng, material=None, visible=Non
             pass
         rng = (ctx.p["Neg_WallThickness"], 0.0) if flip else (0.0, ctx.p["WallThickness"])
     elif rng == "BOLT":
-        # plate thickness plus the protruding screw head, on the same side as
-        # the plate itself
-        flip = False
+        # the head always points away from the body centre: an ear can sit on
+        # either face of the wall, but the screw is tightened from outside
+        outward = AXIS_VEC[hp.axis] if hp.ft >= 0 else AXIS_VEC[hp.axis].Negate()
         try:
-            flip = sp.GetPlane().Normal.DotProduct(AXIS_VEC[hp.axis]) < 0
+            towards_outside = sp.GetPlane().Normal.DotProduct(outward) > 0
         except Exception:
-            pass
-        rng = (ctx.p["Tab_Bolt_In"], 0.0) if flip else (0.0, ctx.p["Tab_Bolt_Out"])
+            towards_outside = True
+        rng = (0.0, ctx.p["Tab_Bolt_Out"]) if towards_outside else (ctx.p["Tab_Bolt_In"], 0.0)
     _set_range(ctx, ext, rng[0], rng[1])
     try:
         ext.Name = "TRK_" + name
@@ -1156,13 +1156,9 @@ def add_tab_bolt_crosses(ctx):
         for host in hosts:
             hp = ctx.pl[host]
             along_y = (hp.axis == "Y")
-            # the plane normals are oriented to +axis when they are created, so
-            # this matches the flip test build_profile uses for the bolt range
-            try:
-                comp = hp.normal.Y if along_y else hp.normal.X
-            except Exception:
-                comp = 1.0
-            sign = -1.0 if comp < 0 else 1.0
+            # same rule as the bolt itself: the head is on the side away from
+            # the body centre
+            sign = 1.0 if hp.ft >= 0 else -1.0
             face = hp.ft + sign * mm(thick + head)
             normal = XYZ(0.0, -sign, 0.0) if along_y else XYZ(-sign, 0.0, 0.0)
             origin = XYZ(0.0, face, 0.0) if along_y else XYZ(face, 0.0, 0.0)
