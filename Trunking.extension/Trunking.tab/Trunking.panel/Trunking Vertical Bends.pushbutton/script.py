@@ -1257,6 +1257,17 @@ class Builder(object):
             axis = Line.CreateBound(origin, origin.Add(cs.BasisZ))
             ElementTransformUtils.RotateElement(self.doc, conn.Id, axis, math.pi / 2.0)
             self.doc.Regenerate()
+            cs = conn.CoordinateSystem
+        if cs.BasisX.Y < -0.99:
+            # both ports must use the SAME width direction: with one of them
+            # mirrored Revit reads the fitting as twisted about its own axis
+            # and refuses to route through it, even though origins and normals
+            # are right
+            origin = conn.Origin
+            axis = Line.CreateBound(origin, origin.Add(cs.BasisZ))
+            ElementTransformUtils.RotateElement(self.doc, conn.Id, axis, math.pi)
+            self.doc.Regenerate()
+            self.note('connector %d width axis flipped to +Y' % cspec['port'])
         self.bind_connector(conn)
         # The connector is hosted on a face of the gauge plate, and that face is
         # not always on the port plane: the origin then follows H with the wrong
