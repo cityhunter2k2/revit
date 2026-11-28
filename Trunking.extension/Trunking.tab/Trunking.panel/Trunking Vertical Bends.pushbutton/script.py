@@ -1235,10 +1235,66 @@ class Builder(object):
                           % (cspec['port'], str(ex).split('\n')[0]))
         return conn
 
+    def build_port_host(self, cspec):
+        """Invisible plate whose face is centred on the port axis.
+
+        A connector is a face-hosted element: its origin is the centre of the
+        face it sits on, and it snaps back to it on every regenerate. Hosting it
+        on a body face or on the gauge sliver therefore puts it wherever that
+        face happens to be centred (z = 49 instead of 0 at 100 x 100), and Revit
+        then refuses to fit the family into a run. This plate is built around the
+        port origin with the duct section as its outline, so the face centre is
+        the port centre by construction.
+        """
+        lay = self.layout
+        W = lay.W
+        H = lay.H
+        c = lay.c
+        s = lay.s
+        if cspec['port'] == 1:
+            nrm = XYZ(-1.0, 0.0, 0.0)
+            origin = XYZ(mm(-c), 0.0, 0.0)
+            u_axis, v_axis = XYZ(0.0, 1.0, 0.0), XYZ(0.0, 0.0, 1.0)
+            half_u, half_v = W / 2.0, H / 2.0
+        else:
+            nrm = XYZ(0.0, 0.0, float(s))
+            origin = XYZ(0.0, 0.0, mm(s * c))
+            # the vertical leg's section is H along X and W along Y
+            u_axis, v_axis = XYZ(1.0, 0.0, 0.0), XYZ(0.0, 1.0, 0.0)
+            half_u, half_v = H / 2.0, W / 2.0
+        # build the plate so it grows INWARD: the face left on the port plane
+        # then has its normal pointing outward, which is what a connector needs
+        sp = SketchPlane.Create(self.doc, Plane.CreateByNormalAndOrigin(nrm.Negate(), origin))
+        corners = [(-half_u, -half_v), (half_u, -half_v), (half_u, half_v), (-half_u, half_v)]
+        pts = [origin.Add(u_axis.Multiply(mm(a))).Add(v_axis.Multiply(mm(b))) for (a, b) in corners]
+        loop = CurveArray()
+        for i in range(4):
+            loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+        profile = CurveArrArray()
+        profile.Append(loop)
+        ext = self.doc.FamilyCreate.NewExtrusion(True, profile, sp, mm(GAUGE_MM))
+        self.doc.Regenerate()
+        self.set_lod(ext, False, False, False)          # invisible at every detail level
+        for face in self.planar_faces(ext):
+            fn = face.FaceNormal
+            if fn.X * nrm[0] + fn.Y * nrm[1] + fn.Z * nrm[2] < 0.999:
+                continue
+            o = face.Origin
+            if (abs(to_mm(o.X) - to_mm(origin.X)) < 0.01 and
+                    abs(to_mm(o.Y) - to_mm(origin.Y)) < 0.01 and
+                    abs(to_mm(o.Z) - to_mm(origin.Z)) < 0.01):
+                return face
+        # any outward face of the plate will do if the exact one is not found
+        for face in self.planar_faces(ext):
+            fn = face.FaceNormal
+            if fn.X * nrm[0] + fn.Y * nrm[1] + fn.Z * nrm[2] > 0.999:
+                return face
+        return None
+
     def build_connectors(self):
         made = []
         for cspec in self.layout.connectors:
-            face = self.connector_host_face(cspec)
+            face = self.build_port_host(cspec)
             host = None
             if face is None:
                 # no body face on the port plane: fall back to the gauge plate
@@ -1247,7 +1303,7 @@ class Builder(object):
                         host = (fd, ext)
                         face = self.find_face(ext, self.layout.planes[cspec['plane']])
                         break
-                self.note('port %d: no body face on the port plane, using the gauge plate'
+                self.note('port %d: no port host plate, using the gauge plate'
                           % cspec['port'])
             try:
                 if face is None:
