@@ -35,7 +35,7 @@ clr.AddReference("RevitAPIUI")
 # Explicit imports: "from Autodesk.Revit.DB import *" does not export everything
 # under pythonnet - XYZ was missing from it - so every type is named here.
 from Autodesk.Revit.DB import (  # noqa: F401
-    BuiltInCategory, BuiltInParameter, Category, Color, ConnectorElement,
+    Arc, BuiltInCategory, BuiltInParameter, Category, Color, ConnectorElement,
     CurveArrArray, CurveArray, ElementId, ElementTransformUtils,
     FailureProcessingResult, FailureSeverity, Family, FamilyElementVisibility,
     FamilyElementVisibilityType, FamilyParameter, FamilySource,
