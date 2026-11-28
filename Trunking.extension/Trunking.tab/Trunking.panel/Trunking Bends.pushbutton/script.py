@@ -1131,6 +1131,64 @@ def add_cross_recesses(ctx, centres):
     ctx.doc.Regenerate()
 
 
+def add_tab_bolt_crosses(ctx):
+    """Phillips slot on every coupling-tab bolt head.
+
+    The bolts are extruded along the hosting plane's normal, so the head's outer
+    face sits WallThickness + Screw_Head_Height from that plane, on the side the
+    plate uses. Two thin voids per head cross on that face.
+    """
+    try:
+        thick = ctx.val_mm("WallThickness")
+        head = ctx.val_mm("Screw_Head_Height")
+        dia = ctx.val_mm("Screw_Head_Diameter")
+        depth = head * 0.35
+    except Exception as ex:
+        ctx.warn("tab bolt cross skipped: {}".format(ex))
+        return
+    long_r = dia * 0.30
+    wide_r = dia * 0.07
+    for frame, uax, hosts in (("XZ", "X", ("Y_out", "Y_in_T")), ("YZ", "Y", ("X_out", "X_in_T"))):
+        for host in hosts:
+            hp = ctx.pl[host]
+            along_y = (hp.axis == "Y")
+            # the plane normals are oriented to +axis when they are created, so
+            # this matches the flip test build_profile uses for the bolt range
+            try:
+                comp = hp.normal.Y if along_y else hp.normal.X
+            except Exception:
+                comp = 1.0
+            sign = -1.0 if comp < 0 else 1.0
+            face = hp.ft + sign * mm(thick + head)
+            normal = XYZ(0.0, -sign, 0.0) if along_y else XYZ(-sign, 0.0, 0.0)
+            origin = XYZ(0.0, face, 0.0) if along_y else XYZ(face, 0.0, 0.0)
+            sp = SketchPlane.Create(ctx.doc, Plane.CreateByNormalAndOrigin(normal, origin))
+            for vkey in ("Z_hole_up", "Z_hole_dn"):
+                u = ctx.pl[uax + "_hole"].ft
+                v = ctx.pl[vkey].ft
+                for along_u in (True, False):
+                    a = long_r if along_u else wide_r
+                    b = wide_r if along_u else long_r
+                    corners = ((-a, -b), (a, -b), (a, b), (-a, b))
+                    pts = []
+                    for (du, dv) in corners:
+                        if along_y:
+                            pts.append(XYZ(u + mm(du), face, v + mm(dv)))
+                        else:
+                            pts.append(XYZ(face, u + mm(du), v + mm(dv)))
+                    loop = CurveArray()
+                    for i in range(4):
+                        loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+                    profile = CurveArrArray()
+                    profile.Append(loop)
+                    try:
+                        ctx.fc.NewExtrusion(False, profile, sp, mm(depth))
+                    except Exception as ex:
+                        ctx.warn("tab bolt cross failed: {}".format(str(ex).split("\n")[0]))
+                        return
+    ctx.doc.Regenerate()
+
+
 def step_geometry(ctx):
     P = ctx.p
     mitre = ctx.mitre
@@ -1177,6 +1235,7 @@ def step_geometry(ctx):
                      circ(uax + "_hole", "Z_hole_dn", SCREW_D_MM / 2.0, "Screw_Head_Radius")]
             build_profile(ctx, "TabBolt_{}_{}".format(uax, host), frame, host, bolts, "BOLT",
                           "Screw_Material", "Show_Tab_Screws", LOD_FINE)
+    add_tab_bolt_crosses(ctx)
 
     # 6) cover fixing screws : 2 per port, on the +Z face of the cover - Show_Cover AND Show_Fasteners
     screws = [circ("X_scr_end", "Y_scr_pos", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
