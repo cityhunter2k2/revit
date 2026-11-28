@@ -393,11 +393,24 @@ class Layout(object):
         g2 = [E('X', -1, 'h'), E('Z', s, 'c'), E('X', 1, 'h'), E('Z', s, 'cg')]
         self.forms.append(FormDef('gauge', False, g1, y_in, meta={'port': 1}))
         self.forms.append(FormDef('gauge', False, g2, y_in, meta={'port': 2}))
+        # ----- port host plates: faces of the invisible plate that carries the
+        # connectors must be locked to reference planes, exactly like the body,
+        # or the connector stays at the build size for every flexed size
+        for ax, sg, base in (('X', -1, 'c'), ('X', -1, 'cg'), ('Y', 1, 'w'), ('Y', -1, 'w'),
+                             ('Z', 1, 'h'), ('Z', -1, 'h'), ('Z', s, 'c'), ('Z', s, 'cg'),
+                             ('X', 1, 'h'), ('X', -1, 'h')):
+            self.ensure(ax, sg, base)
         self.connectors = [
             {'port': 1, 'plane': axis_key('X', -1, 'c'),
-             'origin': (-self.c, 0.0, 0.0), 'normal': (-1.0, 0.0, 0.0), 'height_axis': 'Z'},
+             'origin': (-self.c, 0.0, 0.0), 'normal': (-1.0, 0.0, 0.0), 'height_axis': 'Z',
+             'host_faces': [axis_key('X', -1, 'c'), axis_key('X', -1, 'cg'),
+                            axis_key('Y', 1, 'w'), axis_key('Y', -1, 'w'),
+                            axis_key('Z', 1, 'h'), axis_key('Z', -1, 'h')]},
             {'port': 2, 'plane': axis_key('Z', s, 'c'),
-             'origin': (0.0, 0.0, s * self.c), 'normal': (0.0, 0.0, float(s)), 'height_axis': 'X'},
+             'origin': (0.0, 0.0, s * self.c), 'normal': (0.0, 0.0, float(s)), 'height_axis': 'X',
+             'host_faces': [axis_key('Z', s, 'c'), axis_key('Z', s, 'cg'),
+                            axis_key('X', 1, 'h'), axis_key('X', -1, 'h'),
+                            axis_key('Y', 1, 'w'), axis_key('Y', -1, 'w')]},
         ]
 
         # ----- 4 cover screws : 2 near each port end of the cover -----
@@ -1287,6 +1300,12 @@ class Builder(object):
             self.note('port %d host visibility: %s' % (cspec['port'], str(ex).split('\n')[0]))
         if not hidden:
             self.set_lod(ext, False, False, True)       # visible in Fine only
+        # lock the plate to the same reference planes the body uses, so it
+        # follows Width / Height instead of staying at the build size
+        for key in cspec.get('host_faces', []):
+            if key in self.layout.planes:
+                self.align_face(ext, key, 'port_host')
+        self.doc.Regenerate()
         for face in self.planar_faces(ext):
             fn = face.FaceNormal
             if fn.X * nrm[0] + fn.Y * nrm[1] + fn.Z * nrm[2] < 0.999:
