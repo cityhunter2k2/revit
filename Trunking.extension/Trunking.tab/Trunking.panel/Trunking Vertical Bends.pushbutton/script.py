@@ -1385,6 +1385,18 @@ class Builder(object):
         except Exception:
             pass
         self.conns = made
+        # the absolute frames settle 'is this bend horizontal or vertical'
+        # without having to guess from a screenshot
+        for index, conn in enumerate(made, 1):
+            try:
+                origin = conn.Origin
+                cs = conn.CoordinateSystem
+                self.note('conn%d origin=(%.1f, %.1f, %.1f) width=(%.2f, %.2f, %.2f) out=(%.2f, %.2f, %.2f)'
+                          % (index, to_mm(origin.X), to_mm(origin.Y), to_mm(origin.Z),
+                             cs.BasisX.X, cs.BasisX.Y, cs.BasisX.Z,
+                             cs.BasisZ.X, cs.BasisZ.Y, cs.BasisZ.Z))
+            except Exception as ex:
+                self.note('conn%d frame unreadable: %s' % (index, str(ex).split('\n')[0]))
 
     # ---------------------------------------------------------------- symbolic centre lines (Coarse)
     def build_symbolic(self):
