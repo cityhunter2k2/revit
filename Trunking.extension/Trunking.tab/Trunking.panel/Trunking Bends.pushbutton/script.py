@@ -219,17 +219,37 @@ def run_tx(doc, name, func):
     t = Transaction(doc, name)
     t.Start()
     try:
-        if FAILURE_PREPROCESSOR is not None:
+        # Failure handling must never be able to abort the build: pythonnet
+        # refuses to instantiate a class derived from a .NET interface
+        # ("interface takes exactly one argument"), so every step here is
+        # optional and the modal dialogs are disabled separately.
+        try:
             fho = t.GetFailureHandlingOptions()
-            fho.SetFailuresPreprocessor(FAILURE_PREPROCESSOR())
+            try:
+                fho.SetForcedModalHandling(False)
+            except Exception:
+                pass
             fho.SetClearAfterRollback(True)
+            if FAILURE_PREPROCESSOR is not None:
+                try:
+                    fho.SetFailuresPreprocessor(FAILURE_PREPROCESSOR())
+                except Exception as ex:
+                    LAST_FAILURES.append("failure preprocessor unavailable: {}".format(ex))
             t.SetFailureHandlingOptions(fho)
+        except Exception as ex:
+            LAST_FAILURES.append("failure handling options unavailable: {}".format(ex))
         del LAST_FAILURES[:]
         result = func()
         status = t.Commit()
         if status != TransactionStatus.Committed:
+            details = list(LAST_FAILURES)
+            try:
+                for warning in t.Document.GetWarnings():
+                    details.append(str(warning.GetDescriptionText()))
+            except Exception:
+                pass
             raise RuntimeError("Transaction '{}' was not committed ({}): {}".format(
-                name, status, "; ".join(LAST_FAILURES)))
+                name, status, "; ".join(details) or "no failure reported"))
         return result
     except Exception:
         try:
@@ -1379,8 +1399,7 @@ def main():
 
     saved = [r["path"] for r in results if r["path"]]
     failed = [r["file"] for r in results if not r["ok"]]
-    summary = (u"已完成 {} / 2 個族。\n{}\n\n是否自動載入目前開啟的 Revit 專案？\n"
-               u"Load the families into the active project now?").format(
+    summary = u"已完成 {} / 2 個族。\n{}".format(
         len(saved), u"全部 Flexing 驗收通過 / all flexing checks passed." if not failed
         else u"注意：驗收未通過 / checks failed: " + u", ".join(failed))
     if not saved:
