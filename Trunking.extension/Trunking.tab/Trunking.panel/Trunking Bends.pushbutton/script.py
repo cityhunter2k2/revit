@@ -140,6 +140,40 @@ def _output_folder():
         os.makedirs(folder)
     return folder
 
+
+def _load_env_file():
+    """Apply trunking.env from the repo root (KEY=VALUE, TRUNKING_* only).
+
+    Same file the other buttons read, so TRUNKING_OUT / TRUNKING_TEMPLATE /
+    TRUNKING_LOAD can be changed without touching system environment variables.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    current = here
+    for _ in range(6):
+        candidate = os.path.join(current, 'trunking.env')
+        if os.path.isfile(candidate):
+            try:
+                handle = open(candidate)
+                try:
+                    for raw in handle:
+                        line = raw.strip()
+                        if not line or line.startswith('#') or '=' not in line:
+                            continue
+                        key, _, value = line.partition('=')
+                        key = key.strip()
+                        if key.startswith('TRUNKING_'):
+                            os.environ[key] = value.strip()
+                finally:
+                    handle.close()
+                return candidate
+            except Exception:
+                return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
 # =====================================================================================
 #  CONSTANTS
 # =====================================================================================
@@ -1267,6 +1301,10 @@ def main():
     uiapp = __revit__
     app = uiapp.Application
     project_doc = revit.doc
+
+    env_file = _load_env_file()
+    if env_file:
+        output.print_md(u'Settings: `{0}`'.format(env_file))
 
     output.print_md(u'# Cable Trunking 90\xb0 Bend Family Generator (Front Opening)')
     output.print_md(u'Revit **{0}** build {1}  |  target {2}  |  pyRevit single-type parametric families'
