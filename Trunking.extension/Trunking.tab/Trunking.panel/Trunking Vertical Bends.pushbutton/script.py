@@ -403,14 +403,14 @@ class Layout(object):
         self.connectors = [
             {'port': 1, 'plane': axis_key('X', -1, 'c'),
              'origin': (-self.c, 0.0, 0.0), 'normal': (-1.0, 0.0, 0.0), 'height_axis': 'Z',
-             'host_faces': [axis_key('X', -1, 'c'), axis_key('X', -1, 'cg'),
-                            axis_key('Y', 1, 'w'), axis_key('Y', -1, 'w'),
-                            axis_key('Z', 1, 'h'), axis_key('Z', -1, 'h')]},
+             'host_faces': [axis_key('X', -1, 'c'), axis_key('Y', 1, 'w'),
+                            axis_key('Y', -1, 'w'), axis_key('Z', 1, 'h'),
+                            axis_key('Z', -1, 'h')]},
             {'port': 2, 'plane': axis_key('Z', s, 'c'),
              'origin': (0.0, 0.0, s * self.c), 'normal': (0.0, 0.0, float(s)), 'height_axis': 'X',
-             'host_faces': [axis_key('Z', s, 'c'), axis_key('Z', s, 'cg'),
-                            axis_key('X', 1, 'h'), axis_key('X', -1, 'h'),
-                            axis_key('Y', 1, 'w'), axis_key('Y', -1, 'w')]},
+             'host_faces': [axis_key('Z', s, 'c'), axis_key('X', 1, 'h'),
+                            axis_key('X', -1, 'h'), axis_key('Y', 1, 'w'),
+                            axis_key('Y', -1, 'w')]},
         ]
 
         # ----- 4 cover screws : 2 near each port end of the cover -----
