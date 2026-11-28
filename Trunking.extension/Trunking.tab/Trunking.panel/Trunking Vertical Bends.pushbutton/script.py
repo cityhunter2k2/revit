@@ -1274,7 +1274,19 @@ class Builder(object):
         profile.Append(loop)
         ext = self.doc.FamilyCreate.NewExtrusion(True, profile, sp, mm(GAUGE_MM))
         self.doc.Regenerate()
-        self.set_lod(ext, False, False, False)          # invisible at every detail level
+        # Revit refuses to hide an element at every detail level, so the plate is
+        # hidden through the element visibility parameter instead: the connector
+        # keeps working, the plate never shows.
+        hidden = False
+        try:
+            vis = ext.get_Parameter(BuiltInParameter.IS_VISIBLE_PARAM)
+            if vis is not None:
+                vis.Set(0)
+                hidden = True
+        except Exception as ex:
+            self.note('port %d host visibility: %s' % (cspec['port'], str(ex).split('\n')[0]))
+        if not hidden:
+            self.set_lod(ext, False, False, True)       # visible in Fine only
         for face in self.planar_faces(ext):
             fn = face.FaceNormal
             if fn.X * nrm[0] + fn.Y * nrm[1] + fn.Z * nrm[2] < 0.999:
