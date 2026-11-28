@@ -1373,7 +1373,6 @@ def load_into_project(project_doc, path):
 def main():
     uiapp = __revit__
     app = uiapp.Application
-    project_doc = revit.doc
 
     env_file = _load_env_file()
     if env_file:
@@ -1385,6 +1384,16 @@ def main():
     if app.VersionNumber != TARGET_REVIT_VERSION:
         logger.warning('Script is written for Revit {0}; running on {1}'.format(TARGET_REVIT_VERSION,
                                                                                 app.VersionNumber))
+
+    # The families are built from the template in new documents, so the project
+    # is only needed to optionally load them. Reading the active document can
+    # itself fail (cloud / Desktop Connector models probe an interop assembly
+    # that is not always present), and it used to fail before anything printed.
+    project_doc = None
+    try:
+        project_doc = revit.doc
+    except Exception as ex:
+        output.print_md(u'Active document unavailable: {0}'.format(ex))
 
     template = find_template(app)
     output.print_md(u'Template: `{0}`'.format(template))
