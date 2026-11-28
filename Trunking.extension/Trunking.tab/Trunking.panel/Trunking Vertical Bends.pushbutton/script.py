@@ -1166,10 +1166,39 @@ class Builder(object):
                 continue
             self.mgr.AssociateElementParameterToFamilyParameter(p, self.params[name])
 
-    def make_connector(self, host, cspec):
-        face = self.find_face(host, self.layout.planes[cspec['plane']])
-        if face is None:
-            raise RuntimeError('connector host face not found (port %d)' % cspec['port'])
+    def connector_host_face(self, cspec):
+        """Largest real face that lies on the port plane.
+
+        The gauge plate is a 1 mm void whose edge face is the only thing on that
+        plane, and a connector hosted on that sliver is useless to Routing
+        Preferences ("cannot create fitting from the cable tray network"). The
+        body has a full-size face on the same plane, so it hosts the connector.
+        """
+        pdef = self.layout.planes[cspec['plane']]
+        best = None
+        best_area = -1.0
+        for fd, ext in self.forms:
+            if fd.role == 'gauge':
+                continue
+            for f in self.planar_faces(ext):
+                fn = f.FaceNormal
+                dot = fn.X * pdef.n[0] + fn.Y * pdef.n[1] + fn.Z * pdef.n[2]
+                if abs(abs(dot) - 1.0) > 1e-5:
+                    continue
+                o = f.Origin
+                dd = to_mm(o.X) * pdef.n[0] + to_mm(o.Y) * pdef.n[1] + to_mm(o.Z) * pdef.n[2]
+                if abs(dd - pdef.d) > 0.01:
+                    continue
+                try:
+                    area = f.Area
+                except Exception:
+                    area = 0.0
+                if area > best_area:
+                    best_area = area
+                    best = f
+        return best
+
+    def make_connector(self, face, cspec):
         conn = ConnectorElement.CreateCableTrayConnector(self.doc, face.Reference)
         self.doc.Regenerate()
         nrm = cspec['normal']
@@ -1209,18 +1238,28 @@ class Builder(object):
     def build_connectors(self):
         made = []
         for cspec in self.layout.connectors:
+            face = self.connector_host_face(cspec)
             host = None
-            for fd, ext in self.forms:
-                if fd.role == 'gauge' and fd.meta.get('port') == cspec['port']:
-                    host = (fd, ext)
+            if face is None:
+                # no body face on the port plane: fall back to the gauge plate
+                for fd, ext in self.forms:
+                    if fd.role == 'gauge' and fd.meta.get('port') == cspec['port']:
+                        host = (fd, ext)
+                        face = self.find_face(ext, self.layout.planes[cspec['plane']])
+                        break
+                self.note('port %d: no body face on the port plane, using the gauge plate'
+                          % cspec['port'])
             try:
-                conn = self.make_connector(host[1], cspec)
+                if face is None:
+                    raise RuntimeError('connector host face not found (port %d)' % cspec['port'])
+                conn = self.make_connector(face, cspec)
             except Exception as ex:
                 # fallback: solid (hidden) host instead of a void host
                 self.note('void host rejected (%s) -> hidden solid host' % ex)
                 solid_ext = self.build_profile_form(host[0], solid=True)
                 self.set_lod(solid_ext, False, False, False)
-                conn = self.make_connector(solid_ext, cspec)
+                conn = self.make_connector(self.find_face(solid_ext, self.layout.planes[cspec['plane']]),
+                                           cspec)
             made.append(conn)
         made[0].SetLinkedConnectorElement(made[1])
         try:
