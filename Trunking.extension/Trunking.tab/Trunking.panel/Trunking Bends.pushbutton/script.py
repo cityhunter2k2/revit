@@ -32,7 +32,19 @@ import traceback
 clr.AddReference("RevitAPI")
 clr.AddReference("RevitAPIUI")
 
-from Autodesk.Revit.DB import *  # noqa: F401,F403  (Revit 2027 DB API)
+# Explicit imports: "from Autodesk.Revit.DB import *" does not export everything
+# under pythonnet - XYZ was missing from it - so every type is named here.
+from Autodesk.Revit.DB import (  # noqa: F401
+    BuiltInCategory, BuiltInParameter, Category, Color, ConnectorElement,
+    CurveArrArray, CurveArray, ElementId, ElementTransformUtils,
+    FailureProcessingResult, FailureSeverity, Family, FamilyElementVisibility,
+    FamilyElementVisibilityType, FamilyParameter, FamilySource,
+    FilteredElementCollector, GroupTypeId, IFailuresPreprocessor,
+    IFamilyLoadOptions, Line, Material, Options, PartType, PlanarFace, Plane,
+    Reference, ReferenceArray, ReferencePlane, SaveAsOptions, SketchPlane, Solid,
+    SpecTypeId, Transaction, TransactionStatus, UnitTypeId, UnitUtils, View,
+    ViewType, XYZ,
+)
 
 from pyrevit import script, HOST_APP
 
@@ -836,6 +848,11 @@ def set_visibility(elem, lod, view_specific=False):
         fev.IsShownInCoarse = lod[0]
         fev.IsShownInMedium = lod[1]
         fev.IsShownInFine = lod[2]
+        # the axis flags are unset on a fresh FamilyElementVisibility, so the
+        # solid would not be drawn in plan or elevation views of the project
+        fev.IsShownInTopBottom = True
+        fev.IsShownInFrontBack = True
+        fev.IsShownInLeftRight = True
         elem.SetVisibility(fev)
         return True
     except Exception:
