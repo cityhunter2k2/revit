@@ -53,6 +53,18 @@ from pyrevit import script, HOST_APP
 # module raises too. Nothing here may use it.
 
 
+def _all_families(doc):
+    """Every Family element of the document.
+
+    OfClass needs the CLR type: passing the Python wrapper class returns
+    nothing, which silently emptied the routing table.
+    """
+    try:
+        return list(FilteredElementCollector(doc).OfClass(_clr_type(Family)))
+    except Exception:
+        return []
+
+
 def _routing_table(doc):
     """Every Cable Tray Fitting family in the project with its part type.
 
@@ -69,7 +81,7 @@ def _routing_table(doc):
         return rows
     if cat is None:
         return rows
-    for fam in FilteredElementCollector(doc).OfClass(Family):
+    for fam in _all_families(doc):
         try:
             if fam.FamilyCategory is None or fam.FamilyCategory.Id.Value != cat.Id.Value:
                 continue
@@ -194,6 +206,7 @@ LOD_FINE = (False, False, True)     # tabs + screws          : Fine only
 LOD_CENTER = (True, False, False)   # 2D centre line         : Coarse only
 
 LAST_FAILURES = []
+LAST_VIS_ERROR = [None]
 
 
 def wall_thickness_mm(w, h):
@@ -919,7 +932,8 @@ def set_visibility(elem, lod, view_specific=False):
             fev.IsShownInLeftRight = True
             elem.SetVisibility(fev)
             return True
-        except Exception:
+        except Exception as ex:
+            LAST_VIS_ERROR[0] = str(ex).split("\n")[0]
             continue
     return False
 
@@ -1188,7 +1202,7 @@ def step_connectors_and_centerlines(ctx):
             sc = ctx.fc.NewSymbolicCurve(Line.CreateBound(pts[0], pts[1]), ctx.sk_z0)
             constrain_polyline(ctx, ctx.plan, keys, pts, [sc], False, "CentreLine")
             if not set_visibility(sc, LOD_CENTER, True):
-                ctx.warn("centre line detail-level visibility could not be set")
+                ctx.warn("centre line visibility: {}".format(LAST_VIS_ERROR[0] or "not supported"))
         except Exception as ex:
             ctx.warn("centre line failed: {}".format(str(ex).split("\n")[0]))
     ctx.doc.Regenerate()
@@ -1350,18 +1364,27 @@ def load_into_project(doc, paths):
         ok = False
 
         def _load():
-            res = False
-            try:
-                res = doc.LoadFamily(p)
-            except Exception:
-                res = False
-            if not res and LOAD_OPTIONS is not None:
+            # pythonnet cannot instantiate a class derived from
+            # IFamilyLoadOptions ("interface takes exactly one argument"), so a
+            # same-named family is removed before loading rather than overwritten
+            name = os.path.splitext(os.path.basename(p))[0]
+            removed = False
+            for fam in _all_families(doc):
                 try:
-                    out = doc.LoadFamily(p, LOAD_OPTIONS())
-                    res = bool(out[0]) if isinstance(out, tuple) else bool(out)
+                    if fam.Name == name:
+                        doc.Delete(fam.Id)
+                        removed = True
+                        break
                 except Exception:
-                    res = False
-            return res
+                    continue
+            try:
+                res = bool(doc.LoadFamily(p))
+            except Exception as ex:
+                log("LoadFamily failed for {}: {}".format(p, ex))
+                return removed
+            if removed:
+                log("replaced the family already in the project: {}".format(name))
+            return res or removed
         try:
             ok = run_tx(doc, "Load trunking bend family", _load)
         except Exception as ex:
@@ -1475,6 +1498,9 @@ def main():
                 handle.close()
         except Exception:
             pass
+    else:
+        output.print_md(u"No cable tray fitting family could be read from the project "
+                        u"(no project document open, or the collector returned nothing).")
 
 
 main()
