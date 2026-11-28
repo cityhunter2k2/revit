@@ -913,9 +913,11 @@ def circ(ukey, vkey, r_mm, rparam):
     return {"type": "circle", "u": ukey, "v": vkey, "r": r_mm, "rparam": rparam}
 
 
-def set_visibility(elem, lod, view_specific=False):
+def set_visibility(elem, lod, view_specific=False, axes=True):
     # Symbolic curves refuse a ViewSpecific visibility object; solids refuse
-    # nothing here. Try the preferred kind first, then the other one.
+    # nothing here. Try the preferred kind first, then the other one. Curves
+    # also reject the axis flags ("Invalid visibility type"), so a caller can
+    # ask for the detail levels alone.
     kinds = (FamilyElementVisibilityType.ViewSpecific, FamilyElementVisibilityType.Model)
     if not view_specific:
         kinds = (FamilyElementVisibilityType.Model, FamilyElementVisibilityType.ViewSpecific)
@@ -925,11 +927,12 @@ def set_visibility(elem, lod, view_specific=False):
             fev.IsShownInCoarse = lod[0]
             fev.IsShownInMedium = lod[1]
             fev.IsShownInFine = lod[2]
-            # the axis flags are unset on a fresh FamilyElementVisibility, so the
-            # element would not be drawn in plan or elevation views
-            fev.IsShownInTopBottom = True
-            fev.IsShownInFrontBack = True
-            fev.IsShownInLeftRight = True
+            if axes:
+                # these are unset on a fresh FamilyElementVisibility, so the
+                # element would not be drawn in plan or elevation views
+                fev.IsShownInTopBottom = True
+                fev.IsShownInFrontBack = True
+                fev.IsShownInLeftRight = True
             elem.SetVisibility(fev)
             return True
         except Exception as ex:
@@ -1201,7 +1204,7 @@ def step_connectors_and_centerlines(ctx):
             pts = [XYZ(ctx.pl[ku].ft, ctx.pl[kv].ft, 0.0) for (ku, kv) in keys]
             sc = ctx.fc.NewSymbolicCurve(Line.CreateBound(pts[0], pts[1]), ctx.sk_z0)
             constrain_polyline(ctx, ctx.plan, keys, pts, [sc], False, "CentreLine")
-            if not set_visibility(sc, LOD_CENTER, True):
+            if not set_visibility(sc, LOD_CENTER, True, axes=False):
                 ctx.warn("centre line visibility: {}".format(LAST_VIS_ERROR[0] or "not supported"))
         except Exception as ex:
             ctx.warn("centre line failed: {}".format(str(ex).split("\n")[0]))
