@@ -520,9 +520,18 @@ class Tx(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
-            status = self.t.Commit()
+            try:
+                status = self.t.Commit()
+            except Exception:
+                status = self.t.GetStatus()
             if status != TransactionStatus.Committed:
-                raise RuntimeError('transaction %s ended %s' % (self.name, status))
+                # a transaction left Pending blocks Document.Close, so nothing
+                # may stay open when this raises
+                try:
+                    self.t.RollBack()
+                except Exception:
+                    pass
+                raise RuntimeError('transaction "%s" ended %s' % (self.name, status))
         else:
             try:
                 self.t.RollBack()
@@ -623,6 +632,9 @@ def parameter_plan(bend):
         ('Hole_Offset_H', G.Geometry, S.Length, 'len', None, 'Height / 4'),
         ('Hole_Axial_Dist', G.Geometry, S.Length, 'len', None, 'CenterToEnd + Flange_Length / 2'),
         ('Screw_End_Offset_Diag', G.Geometry, S.Length, 'len', None, 'Screw_End_Offset * 0.70710678118'),
+        # the screw circle is driven by a RADIAL dimension when the API refuses
+        # a diameter dimension on the sketch arc
+        ('Screw_Radius', G.Geometry, S.Length, 'len', None, 'Screw_Diameter / 2'),
     ]
     if bend == 'mitre':
         plan.append(('Diag_Offset', G.Geometry, S.Length, 'len', None, '(Height + Stub) * 0.70710678118'))
@@ -997,6 +1009,18 @@ class Builder(object):
                 return True
             except Exception as ex:
                 last = ex
+        # the sketch arc refuses a diameter dimension here; a radial dimension
+        # on the same arc drives the circle through Screw_Radius
+        radius_param = param_name.replace('_Diameter', '_Radius')
+        if radius_param in self.params:
+            for v in views:
+                try:
+                    dim = self.doc.FamilyCreate.NewRadialDimension(v, arc.Reference, arc.Center)
+                    dim.FamilyLabel = self.params[radius_param]
+                    self.note('radial dimension used for %s' % radius_param)
+                    return True
+                except Exception as ex:
+                    last = ex
         self.note('diameter dimension -> %s not accepted by the API (%s)' % (param_name, last))
         return False
 
@@ -1188,11 +1212,19 @@ class Builder(object):
         return None if v is None else to_mm(v)
 
     def bbox(self, ext):
-        bb = ext.get_BoundingBox(None)
-        if bb is None:
-            return None
-        return (to_mm(bb.Min.X), to_mm(bb.Min.Y), to_mm(bb.Min.Z),
-                to_mm(bb.Max.X), to_mm(bb.Max.Y), to_mm(bb.Max.Z))
+        for _attempt in (0, 1):
+            try:
+                bb = ext.get_BoundingBox(None)
+            except Exception:
+                bb = None
+            if bb is not None:
+                return (to_mm(bb.Min.X), to_mm(bb.Min.Y), to_mm(bb.Min.Z),
+                        to_mm(bb.Max.X), to_mm(bb.Max.Y), to_mm(bb.Max.Z))
+            try:
+                self.doc.Regenerate()
+            except Exception:
+                pass
+        return None
 
     def arcs_of(self, ext):
         out = []
@@ -1356,7 +1388,11 @@ class Builder(object):
             self.doc.SaveAs(path, opt)
         finally:
             if self.doc is not None:
-                self.doc.Close(False)
+                # closing must never mask the real failure: report it instead
+                try:
+                    self.doc.Close(False)
+                except Exception as ex:
+                    self.note('document could not be closed: %s' % ex)
         return path, rows
 
 
