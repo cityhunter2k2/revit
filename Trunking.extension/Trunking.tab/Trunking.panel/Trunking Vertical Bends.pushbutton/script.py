@@ -1113,17 +1113,48 @@ class Builder(object):
             self.label_diameter(ext, ctr, 'Hole_Diameter', self.views_all())
         return ext
 
+    def add_cross_recess(self, center, out, xa, ya):
+        """Phillips slot: two thin voids cut into the outer face of a head.
+
+        They are voids, so they are invisible themselves and simply notch the
+        head that contains them.
+        """
+        face = xyz_mm(*center).Add(out.Multiply(mm(SCREW_H_MM)))
+        sp = SketchPlane.Create(self.doc, Plane.CreateByNormalAndOrigin(out.Negate(), face))
+        long_r = SCREW_D_MM * 0.30
+        wide_r = SCREW_D_MM * 0.07
+        for (u, v) in ((xa, ya), (ya, xa)):
+            loop = CurveArray()
+            corners = [(-long_r, -wide_r), (long_r, -wide_r), (long_r, wide_r), (-long_r, wide_r)]
+            pts = [face.Add(u.Multiply(mm(a))).Add(v.Multiply(mm(b))) for (a, b) in corners]
+            for i in range(4):
+                loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+            profile = CurveArrArray()
+            profile.Append(loop)
+            try:
+                self.doc.FamilyCreate.NewExtrusion(False, profile, sp, mm(SCREW_H_MM * 0.35))
+                self.doc.Regenerate()
+            except Exception as ex:
+                self.note('cross recess failed: %s' % str(ex).split('\n')[0])
+                return
+
     def build_screw(self, fd):
         c = fd.circle
         nrm = XYZ(c['normal'][0], c['normal'][1], c['normal'][2])
         center = c['center']
-        sp = SketchPlane.Create(self.doc, Plane.CreateByNormalAndOrigin(nrm, xyz_mm(*center)))
-        xa = XYZ.BasisY
-        ya = nrm.CrossProduct(xa)
+        # the head must stand proud of the OUTER face: if the surface normal
+        # points into the body the extrusion is built the other way round
+        out = nrm
+        if (center[0] * nrm.X + center[1] * nrm.Y + center[2] * nrm.Z) < 0.0:
+            out = nrm.Negate()
+        sp = SketchPlane.Create(self.doc, Plane.CreateByNormalAndOrigin(out, xyz_mm(*center)))
+        xa = XYZ.BasisY if abs(out.Y) < 0.9 else XYZ.BasisX
+        ya = out.CrossProduct(xa)
         profile = CurveArrArray()
         profile.Append(self.circle_loop(center, SCREW_D_MM / 2.0, xa, ya))
         ext = self.doc.FamilyCreate.NewExtrusion(True, profile, sp, mm(SCREW_H_MM))
         self.doc.Regenerate()
+        self.add_cross_recess(center, out, xa, ya)
         self.align_face(ext, c['surf'], 'screw')
         self.align_face(ext, c['top'], 'screw')
         side_views = self.plan_views + self.side_views
