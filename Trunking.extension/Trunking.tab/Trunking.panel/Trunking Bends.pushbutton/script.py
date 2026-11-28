@@ -441,6 +441,35 @@ class BendFamilyBuilder(object):
         self.stats['warnings'].append(text)
         logger.warning('[{0}] {1}'.format(self.spec['file'], text))
 
+    def _record_routing_data(self):
+        """Record what Routing Preferences looks at: category, part type, connectors.
+
+        A family only appears under "Horizontal Bend" when its category is Cable
+        Tray Fittings, its Part Type is Elbow, it owns cable tray connectors and
+        it is loaded in the project.
+        """
+        family = self.doc.OwnerFamily
+        try:
+            category = family.FamilyCategory
+            self.stats['category'] = str(category.Name) if category is not None else 'none'
+        except Exception:
+            self.stats['category'] = '?'
+        value, elbow = -1, None
+        try:
+            parameter = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+            if parameter is not None:
+                value = parameter.AsInteger()
+        except Exception:
+            pass
+        try:
+            elbow = int(PartType.Elbow)
+        except Exception:
+            pass
+        if elbow is not None and value == elbow:
+            self.stats['part_type'] = 'Elbow'
+        else:
+            self.stats['part_type'] = 'value {0} (Elbow = {1})'.format(value, elbow)
+
     def _collapse_to_one_type(self):
         """Delete every family type except the one named "Standard".
 
@@ -473,11 +502,25 @@ class BendFamilyBuilder(object):
             if current is None or current.Id.Value != cat.Id.Value:
                 family.FamilyCategory = cat
 
+        # Part Type = Elbow is what puts the family under "Horizontal Bend" in
+        # Routing Preferences. The FAMILY_CONTENT_PART_TYPE parameter is
+        # read-only in the 2027 fitting templates; the Family property is the
+        # route that works there.
         part_type = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+        set_ok = False
         if part_type is not None and not part_type.IsReadOnly:
-            part_type.Set(int(PartType.Elbow))
-        else:
-            self._warn('FAMILY_CONTENT_PART_TYPE is read-only in this template; set Part Type = Elbow manually')
+            try:
+                part_type.Set(int(PartType.Elbow))
+                set_ok = True
+            except Exception as ex:
+                self._warn('Part Type via FAMILY_CONTENT_PART_TYPE failed: {0}'.format(ex))
+        if not set_ok:
+            try:
+                family.FamilyContentPartType = PartType.Elbow
+                set_ok = True
+            except Exception as ex:
+                self._warn('Part Type could not be set (FamilyContentPartType): {0}'.format(ex))
+        self._record_routing_data()
 
         # exactly ONE type named "Standard". The Metric Cable Tray Fitting
         # template ships three, so the extras are deleted instead of assumed away.
@@ -1092,6 +1135,7 @@ class BendFamilyBuilder(object):
                 self.conn1.AssignAsPrimary()
         except Exception:
             pass
+        self.stats['connectors'] = len([c for c in (self.conn1, self.conn2) if c is not None])
 
     def _create_cover(self):
         W, H, T, S = self.W, self.H, self.T, self.STUB
@@ -1371,6 +1415,9 @@ def main():
         summary = [
             ['Saved file', b.saved_path],
             ['Family types', '1 (Standard)'],
+            ['Category (needs Cable Tray Fittings)', b.stats.get('category', '?')],
+            ['Part type (needs Elbow)', b.stats.get('part_type', '?')],
+            ['Connectors (needs 2)', b.stats.get('connectors', 0)],
             ['Reference planes / dimensions', '{0} / {1}'.format(b.stats['planes'], b.stats['dimensions'])],
             ['Sketch alignments ok / failed / unmatched', '{0} / {1} / {2}'.format(
                 b.stats['alignments_ok'], b.stats['alignments_failed'], b.stats['unmatched_lines'])],
