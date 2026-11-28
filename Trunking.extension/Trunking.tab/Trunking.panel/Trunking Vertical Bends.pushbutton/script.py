@@ -492,10 +492,13 @@ class SwallowWarnings(IFailuresPreprocessor):
 class Tx(object):
     """Usage: with Tx(doc, name):  -> Transaction with warning swallower, rollback on error."""
 
-    def __init__(self, doc, name):
+    def __init__(self, doc, name, rollback=False):
         self.doc = doc
         self.name = name
         self.t = None
+        # rollback=True is for measuring: the transaction is always undone, so a
+        # size that Revit refuses cannot leave failures behind and block SaveAs
+        self.rollback = rollback
 
     def __enter__(self):
         self.t = Transaction(self.doc, self.name)
@@ -519,6 +522,12 @@ class Tx(object):
         return self.t
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.rollback:
+            try:
+                self.t.RollBack()
+            except Exception:
+                pass
+            return False
         if exc_type is None:
             try:
                 status = self.t.Commit()
@@ -991,7 +1000,17 @@ class Builder(object):
             self.align_fail += 1
             self.note('circle not found for centre alignment [%s]' % tag)
             return False
-        ok = self.align(views, self.refs[key].GetReference(), el.CenterPointReference,
+        try:
+            centre_ref = el.CenterPointReference
+        except Exception as ex:
+            self.align_fail += 1
+            self.note('no centre reference for %s [%s]: %s' % (tag, key, str(ex).split('\n')[0]))
+            return False
+        if centre_ref is None:
+            self.align_fail += 1
+            self.note('empty centre reference for %s [%s]' % (tag, key))
+            return False
+        ok = self.align(views, self.refs[key].GetReference(), centre_ref,
                         '%s:centre:%s' % (tag, key))
         self.doc.Regenerate()
         return ok
@@ -1332,7 +1351,7 @@ class Builder(object):
         for (w, h) in STD_SIZES:
             err_txt = ''
             try:
-                with Tx(self.doc, 'flex %d x %d' % (w, h)):
+                with Tx(self.doc, 'flex %d x %d' % (w, h), rollback=True):
                     self.mgr.Set(self.params['Width'], mm(w))
                     self.mgr.Set(self.params['Height'], mm(h))
                     self.doc.Regenerate()
@@ -1356,13 +1375,8 @@ class Builder(object):
                 'OK' if res['conn'] else 'FAIL', 'PASS' if ok else 'CHECK'])
             for m in res['msg'] + ([err_txt] if err_txt else []):
                 self.note('[%d x %d] %s' % (w, h, m))
-        try:
-            with Tx(self.doc, 'flex reset'):
-                self.mgr.Set(self.params['Width'], mm(DEFAULT_W))
-                self.mgr.Set(self.params['Height'], mm(DEFAULT_H))
-                self.doc.Regenerate()
-        except Exception as ex:
-            self.note('could not reset to the default size: %s' % str(ex).split('\n')[0])
+        # every size was measured inside a rolled back transaction, so the type
+        # is still at its build size: nothing to reset
         return rows
 
     def safe_pv(self, name):
@@ -1390,7 +1404,7 @@ class Builder(object):
                 self.build_symbolic()
                 self.apply_visibility_and_materials()
             assert_single_type(self.mgr, 'before flexing')
-            if os.environ.get('TRUNKING_FLEX', '0') == '1':
+            if os.environ.get('TRUNKING_FLEX', '1') == '1':
                 rows = self.flex_all()
             else:
                 # Flexing drives Revit into failures that pythonnet cannot
