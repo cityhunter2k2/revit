@@ -1440,6 +1440,33 @@ def main():
 
     saved = [b for b in builders if b.saved_path]
     failed = [b for b in builders if b.error]
+    log_path = os.path.join(out_dir, 'bends-build.log')
+    try:
+        handle = open(log_path, 'w')
+        try:
+            handle.write(u'Revit {0} build {1}\n'.format(app.VersionNumber, app.VersionBuild))
+            handle.write(u'template: {0}\n'.format(template))
+            handle.write(u'output: {0}\n'.format(out_dir))
+            for b in builders:
+                handle.write(u'\n[{0}]\n'.format(b.spec['file']))
+                if b.error:
+                    handle.write(u'ERROR:\n{0}\n'.format(b.error))
+                    continue
+                for key in ('category', 'part_type', 'connectors', 'z_lock', 'connector_host',
+                            'planes', 'dimensions', 'alignments_ok', 'alignments_failed',
+                            'unmatched_lines'):
+                    handle.write(u'{0}: {1}\n'.format(key, b.stats.get(key, '?')))
+                handle.write(u'saved: {0}\n'.format(b.saved_path))
+                handle.write(u'flex_all_ok: {0}\n'.format(b.flex_all_ok))
+                for warning in b.stats.get('warnings') or []:
+                    handle.write(u'warning: {0}\n'.format(warning))
+                for row in b.flex_rows:
+                    handle.write(u' | '.join(u'{0}'.format(cell) for cell in row) + u'\n')
+        finally:
+            handle.close()
+        output.print_md(u'Log: `{0}`'.format(log_path))
+    except Exception as ex:
+        logger.warning('could not write {0}: {1}'.format(log_path, ex))
     msg = u'已建立 {0} / {1} 個族。\n'.format(len(saved), len(FAMILY_SPECS))
     for b in saved:
         msg += u'  - {0}  [{1}]\n'.format(os.path.basename(b.saved_path),
@@ -1455,9 +1482,9 @@ def main():
         _alert(msg + u'\n目前沒有開啟的專案文件，請手動載入 .rfa。', title='Trunking bends')
         return
 
-    if os.environ.get('TRUNKING_LOAD') != '1':
-        _alert(msg + u'\n已存檔，未自動載入專案。'
-                     u'\n（CPython 引擎不支援詢問對話框；設 TRUNKING_LOAD=1 可自動載入）',
+    if os.environ.get('TRUNKING_LOAD', '1') != '1':
+        _alert(msg + u'\n已存檔，未載入專案（TRUNKING_LOAD=0）。'
+                     u'\n載入後才能在「佈線設定 → 水平彎頭」看到這個族。',
                title='Trunking bends')
         return
 
