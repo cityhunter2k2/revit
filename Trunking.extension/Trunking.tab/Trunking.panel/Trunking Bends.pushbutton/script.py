@@ -1136,6 +1136,16 @@ class BendFamilyBuilder(object):
         except Exception:
             pass
         self.stats['connectors'] = len([c for c in (self.conn1, self.conn2) if c is not None])
+        details = []
+        for index, conn in enumerate((self.conn1, self.conn2), 1):
+            if conn is None:
+                details.append('c{0}: missing'.format(index))
+                continue
+            try:
+                details.append('c{0}: domain={1} shape={2}'.format(index, conn.Domain, conn.Shape))
+            except Exception as ex:
+                details.append('c{0}: {1}'.format(index, ex))
+        self.stats['connector_detail'] = '; '.join(details)
 
     def _create_cover(self):
         W, H, T, S = self.W, self.H, self.T, self.STUB
@@ -1452,9 +1462,9 @@ def main():
                 if b.error:
                     handle.write(u'ERROR:\n{0}\n'.format(b.error))
                     continue
-                for key in ('category', 'part_type', 'connectors', 'z_lock', 'connector_host',
-                            'planes', 'dimensions', 'alignments_ok', 'alignments_failed',
-                            'unmatched_lines'):
+                for key in ('category', 'part_type', 'connectors', 'connector_detail', 'z_lock',
+                            'connector_host', 'planes', 'dimensions', 'alignments_ok',
+                            'alignments_failed', 'unmatched_lines'):
                     handle.write(u'{0}: {1}\n'.format(key, b.stats.get(key, '?')))
                 handle.write(u'saved: {0}\n'.format(b.saved_path))
                 handle.write(u'flex_all_ok: {0}\n'.format(b.flex_all_ok))
