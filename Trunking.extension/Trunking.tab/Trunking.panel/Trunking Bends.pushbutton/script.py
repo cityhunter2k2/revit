@@ -79,7 +79,8 @@ from Autodesk.Revit.DB import (
     CurveElement,
     ElementId,
     Family,
-    FamilyElementVisibilitySettings,
+    FamilyElementVisibility,
+    FamilyElementVisibilityType,
     FamilySource,
     FilteredElementCollector,
     GeometryInstance,
@@ -753,10 +754,15 @@ class BendFamilyBuilder(object):
         self._associate(ext, BuiltInParameter.EXTRUSION_END_PARAM, end_param)
 
     def _set_visibility(self, element, coarse, medium, fine):
-        settings = FamilyElementVisibilitySettings()
+        # Revit 2027 has FamilyElementVisibility(VisibilityType), not the older
+        # FamilyElementVisibilitySettings; the axis flags default to off.
+        settings = FamilyElementVisibility(FamilyElementVisibilityType.Model)
         settings.IsShownInCoarse = coarse
         settings.IsShownInMedium = medium
         settings.IsShownInFine = fine
+        settings.IsShownInTopBottom = True
+        settings.IsShownInFrontBack = True
+        settings.IsShownInLeftRight = True
         element.SetVisibility(settings)
 
     def _sketch_curve_refs(self, ext):
