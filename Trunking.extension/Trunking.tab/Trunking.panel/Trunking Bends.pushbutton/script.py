@@ -1,167 +1,83 @@
 #! python3
 # -*- coding: utf-8 -*-
-# pylint: skip-file
-"""Cable Trunking 90-degree Bend Family Generator  (Front Opening / 正面蓋型)
-
-Target   : Autodesk Revit 2027 (.NET 8)  +  pyRevit 7.1
-Engines  : IronPython 3.4 / IronPython 2.7 / CPython 3  (standard library + clr + Revit API + pyrevit only)
-Install  : <ext>.extension/<tab>.tab/<panel>.panel/TrunkingBends.pushbutton/script.py
-
-One click creates TWO parametric Cable Tray Fitting families (.rfa):
-  1. Trunking_90_MitreBend_FrontOpening.rfa   90 deg Mitre bend / 斜角槽曲  -> Revit Horizontal Bend
-       outer corner = full 90 deg right angle, inner corner = 45 deg chamfer, C = Stub * sqrt(2) = 106.07 mm
-  2. Trunking_90_SharpBend_FrontOpening.rfa   90 deg Sharp bend / 死角槽曲  -> Revit Horizontal Bend
-       outer corner = full 90 deg right angle, inner corner = square,      C = Stub = 75 mm
-
-SINGLE TYPE FOR ALL SIZES
-  * every family contains exactly ONE family type named "Standard" (asserted before SaveAs)
-  * no size-specific types, no type catalog, no lookup table
-  * all size inputs (Width, Height, Angle, Stub) and all derived values (CenterToEnd, WallThickness, etc.)
-    are INSTANCE parameters, so the same type adapts to every trunking size in the project
-    (Routing Preferences -> Horizontal Bend).
-
-GEOMETRY (plan, XY, mm).  Origin (0,0,0) = intersection of the two tray centre lines.
-  W = Width, H = Height, Stub = 75, CenterToEnd = W/2 + Stub, A = B = W + Stub
-  Mitre bend outline (5 vertices):
-      P1 (-W/2, -W/2)              outer corner - full right angle (never chamfered)
-      P2 (+W/2+75, -W/2)           port 1 outer
-      P3 (+W/2+75, +W/2)           port 1 inner
-      P4 (+W/2, +W/2+75)           port 2 inner  (P3 -> P4 = inner 45 deg chamfer, C = 75*sqrt(2) = 106.07)
-      P5 (-W/2, +W/2+75)           port 2 outer
-  Sharp bend outline (6 vertices): same, plus inner square corner (+W/2, +W/2) between P3 and P4 (C = 75 / 75)
-  Z: body (U channel) from -H/2 to +H/2, front cover on top (+Z) from +H/2 to +H/2 + WallThickness.
-
-REVIT 2027 API COMPLIANCE
-  * ElementId        : only .Value (Int64) / ElementId(Int64).  The removed 32-bit accessor is never used.
-  * Specs            : SpecTypeId.Length / SpecTypeId.Angle / SpecTypeId.Boolean.YesNo /
-                       SpecTypeId.String.Text / SpecTypeId.Reference.Material
-  * Groups           : GroupTypeId.Geometry (shown as "Dimensions" in the UI), GroupTypeId.Visibility,
-                       GroupTypeId.IdentityData, GroupTypeId.Materials
-  * Units            : UnitUtils.ConvertToInternalUnits(value, UnitTypeId.Millimeters)
-  * AddParameter     : fam_mgr.AddParameter(name, GroupTypeId.xxx, SpecTypeId.xxx, is_instance)
-  * Connectors       : ConnectorElement.CreateCableTrayConnector(doc, face_ref) on both ports,
-                       CONNECTOR_WIDTH / CONNECTOR_HEIGHT / CONNECTOR_ANGLE associated to instance
-                       parameters, conn1.SetLinkedConnectorElement(conn2)
-  * Deprecated API   : the legacy parameter-type / parameter-group / display-unit enums are never used.
-
-Note on the wall thickness formula: Revit formulas do not implement "<=" / ">=".
-The specification  if(and(W <= 50 mm, H <= 50 mm), 1.0 mm, (nested ifs))  is therefore written with
-the Revit-legal equivalent  not(W > 50 mm)  which yields exactly the same T10/T12/T14/T16 result.
 """
+Trunking 90-degree bends - FRONT OPENING (正面蓋型)  ->  parametric Revit families (.rfa)
+=========================================================================================
+Target : Autodesk Revit 2027 (.NET 8)  +  pyRevit 7.1  (IronPython 3.4 / IronPython 2.7 / CPython 3)
+Output : 2 families, ONE type ("Standard") each, ALL sizes driven by INSTANCE parameters
+           1) Trunking_90_MitreBend_FrontOpening.rfa   (90 deg mitre bend  - outer corner 90, inner corner 45-deg edge)
+           2) Trunking_90_SharpBend_FrontOpening.rfa   (90 deg sharp bend  - outer corner 90, inner corner 90)
+Category: Cable Tray Fittings, Part Type = horizontal bend (Channel Elbow), 2 cable-tray connectors (linked).
 
-from __future__ import print_function, division
+Geometry (mm, family origin = intersection of the two trunking centre lines, Z up)
+   W = Width, H = Height, Stub = 75
+   CenterToEnd = W/2 + Stub        A = B = W + Stub
+   Mitre outline (5 pts) : (-W/2,-W/2) (+W/2+75,-W/2) (+W/2+75,+W/2) (+W/2,+W/2+75) (-W/2,+W/2+75)
+   Sharp outline (6 pts) : (-W/2,-W/2) (+W/2+75,-W/2) (+W/2+75,+W/2) (+W/2,+W/2) (+W/2,+W/2+75) (-W/2,+W/2+75)
+   Z range -H/2 .. +H/2 ; cover on +Z (top, flush with +H/2) ; cover screw heads protrude 3 mm.
 
-__title__ = 'Trunking\n90\xb0 Bends'
-__author__ = 'MEP BIM Library Automation'
-__doc__ = ('Generate 2 parametric cable trunking 90-degree bend families (Mitre / Sharp, front opening)\n'
-           'for Revit 2027 cable tray routing preferences.  Single type "Standard" drives all sizes.')
-__min_revit_ver__ = 2024
+Install : <Your>.extension/<Tab>.tab/<Panel>.panel/<Name>.pushbutton/script.py
+"""
+__title__ = u"Trunking\nBend RFA"
+__author__ = u"MEP BIM Family Tools"
+__doc__ = (u"Generate 2 parametric 90-degree trunking bend families (Front opening: mitre / sharp). "
+           u"One 'Standard' type, all instance parameters, Flexing-validated for 9 + 2 sizes.")
 
+import clr
 import os
+import sys
 import math
 import traceback
 
-import clr
-clr.AddReference('RevitAPI')
-clr.AddReference('RevitAPIUI')
-clr.AddReference('System')
+clr.AddReference("RevitAPI")
+clr.AddReference("RevitAPIUI")
 
-from System import Int64
+from Autodesk.Revit.DB import *  # noqa: F401,F403  (Revit 2027 DB API)
 
-from Autodesk.Revit.DB import (
-    BuiltInCategory,
-    BuiltInParameter,
-    Category,
-    Color,
-    ConnectorElement,
-    CurveArrArray,
-    CurveArray,
-    CurveElement,
-    ElementId,
-    Family,
-    FamilyElementVisibility,
-    FamilyElementVisibilityType,
-    FamilySource,
-    FilteredElementCollector,
-    GeometryInstance,
-    GroupTypeId,
-    IFamilyLoadOptions,
-    Line,
-    Material,
-    Options,
-    PartType,
-    Plane,
-    PlanarFace,
-    ReferenceArray,
-    ReferencePlane,
-    SaveAsOptions,
-    SketchPlane,
-    Solid,
-    SpecTypeId,
-    Transaction,
-    UnitTypeId,
-    UnitUtils,
-    View,
-    ViewDetailLevel,
-    ViewType,
-    XYZ,
-)
+from pyrevit import script, HOST_APP
 
-from pyrevit import revit, script
-
-logger = script.get_logger()
-output = script.get_output()
+# pyrevit.forms is a stub backend on the CPython engine: pick_file, pick_folder
+# and alert all raise PyRevitCPythonNotSupported, and any other attribute of the
+# module raises too. Nothing here may use it.
 
 
-def _alert(message, title='Trunking bends'):
-    """Report without pyRevit dialogs.
-
-    On the CPython engine pyrevit.forms is a stub backend: pick_folder,
-    pick_file and alert all raise PyRevitCPythonNotSupported. Messages go to
-    the output window and the log instead.
-    """
+def _alert(message, title=u"Trunking Bend RFA"):
+    """Report through the output window and the log instead of a dialog."""
     try:
-        logger.info(u'[{0}] {1}'.format(title, message))
+        output = script.get_output()
+        output.print_md(u"**{0}**".format(title))
+        output.print_md(u"{0}".format(message))
     except Exception:
         pass
-    try:
-        output.print_md(u'**{0}**'.format(title))
-        output.print_md(u'{0}'.format(message))
-    except Exception:
-        print(u'{0}: {1}'.format(title, message))
+    log(u"{0}: {1}".format(title, message))
 
 
 def _output_folder():
-    """TRUNKING_OUT, else Documents\\Trunking\\families (no folder dialog)."""
-    folder = os.environ.get('TRUNKING_OUT')
+    """TRUNKING_OUT, else Documents\\Trunking\\families - no folder dialog."""
+    folder = os.environ.get("TRUNKING_OUT")
     if not folder:
-        folder = os.path.join(os.path.expanduser('~'), 'Documents', 'Trunking', 'families')
+        folder = os.path.join(os.path.expanduser("~"), "Documents", "Trunking", "families")
     if not os.path.isdir(folder):
         os.makedirs(folder)
     return folder
 
 
 def _load_env_file():
-    """Apply trunking.env from the repo root (KEY=VALUE, TRUNKING_* only).
-
-    Same file the other buttons read, so TRUNKING_OUT / TRUNKING_TEMPLATE /
-    TRUNKING_LOAD can be changed without touching system environment variables.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    current = here
+    """Apply trunking.env from the repo root (KEY=VALUE, TRUNKING_* only)."""
+    current = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        candidate = os.path.join(current, 'trunking.env')
+        candidate = os.path.join(current, "trunking.env")
         if os.path.isfile(candidate):
             try:
                 handle = open(candidate)
                 try:
                     for raw in handle:
                         line = raw.strip()
-                        if not line or line.startswith('#') or '=' not in line:
+                        if not line or line.startswith("#") or "=" not in line:
                             continue
-                        key, _, value = line.partition('=')
+                        key, _, value = line.partition("=")
                         key = key.strip()
-                        if key.startswith('TRUNKING_'):
+                        if key.startswith("TRUNKING_"):
                             os.environ[key] = value.strip()
                 finally:
                     handle.close()
@@ -174,1374 +90,1292 @@ def _load_env_file():
         current = parent
     return None
 
-# =====================================================================================
-#  CONSTANTS
-# =====================================================================================
-TARGET_REVIT_VERSION = '2027'
-TEMPLATE_ROOT = r'C:\ProgramData\Autodesk\RVT 2027\Family Templates'
-# search keywords, best match first (English metric, then Traditional / Simplified Chinese names)
-TEMPLATE_KEYWORDS = [
-    u'Metric Cable Tray Fitting',
-    u'公制電纜架配件',
-    u'公制電纜架管件',
-    u'公制電纜橋架配件',
-    u'公制電纜橋架管件',
-    u'公制电缆桥架配件',
-    u'公制电缆桥架管件',
-    u'電纜架配件',
-    u'電纜架管件',
-    u'電纜橋架',
-    u'电缆桥架',
-    u'Cable Tray Fitting',
-]
-
-TYPE_NAME = 'Standard'
-DEFAULT_W = 100.0        # mm  design size used while drawing the sketches
-DEFAULT_H = 100.0        # mm
-DEFAULT_STUB = 75.0      # mm  inner straight length (C of the sharp bend)
-DEFAULT_FLANGE = 25.0    # mm  coupling tab length beyond the port face
-TAB_CLEARANCE = 2.0      # mm  tab inset from floor / top
-PLANE_HALF_LEN = 450.0   # mm  graphical half-length of created reference planes
-TOL_MM = 0.5             # mm  flexing acceptance tolerance (bounding box / connector origin)
-MATCH_TOL_MM = 0.02      # mm  sketch-line to reference-plane matching tolerance
-
-STANDARD_SIZES = [(50, 50), (75, 50), (75, 75), (100, 75), (100, 100),
-                  (150, 100), (150, 150), (200, 150), (200, 200)]
-EXTRA_SIZES = [(300, 100), (50, 100)]
-
-# Revit-legal version of:  if(and(W <= 50, H <= 50), 1.0, if(and(W <= 100, H <= 75), 1.2,
-#                           if(and(W <= 150, H <= 100), 1.4, 1.6)))
-WALL_THICKNESS_FORMULA = (
-    'if(and(not(Width > 50 mm), not(Height > 50 mm)), 1.0 mm, '
-    'if(and(not(Width > 100 mm), not(Height > 75 mm)), 1.2 mm, '
-    'if(and(not(Width > 150 mm), not(Height > 100 mm)), 1.4 mm, 1.6 mm)))'
-)
+# ----------------------------------------------------------------------------------------
+# 0. CONFIGURATION (all values in millimetres unless noted)
+# ----------------------------------------------------------------------------------------
+TEMPLATE_ROOT = u"C:\\ProgramData\\Autodesk\\RVT 2027\\Family Templates"
 
 FAMILY_SPECS = [
-    {
-        'kind': 'mitre',
-        'file': 'Trunking_90_MitreBend_FrontOpening',
-        'title': u'90\xb0 Mitre Bend - Front Opening (90\xb0 斜角槽曲 正面蓋型)',
-        'c_formula': 'Stub * sqrt(2)',
-        'description': 'Cable trunking 90 deg mitre bend, front opening cover, inner 45 deg chamfer C = Stub*sqrt(2)',
-    },
-    {
-        'kind': 'sharp',
-        'file': 'Trunking_90_SharpBend_FrontOpening',
-        'title': u'90\xb0 Sharp Bend - Front Opening (90\xb0 死角槽曲 正面蓋型)',
-        'c_formula': 'Stub',
-        'description': 'Cable trunking 90 deg sharp bend, front opening cover, inner square corner C = Stub',
-    },
+    {"key": "mitre", "mitre": True,
+     "file": u"Trunking_90_MitreBend_FrontOpening.rfa",
+     "label": "MitreBend_FrontOpening"},
+    {"key": "sharp", "mitre": False,
+     "file": u"Trunking_90_SharpBend_FrontOpening.rfa",
+     "label": "SharpBend_FrontOpening"},
 ]
 
+STD_SIZES = [(50, 50), (75, 50), (75, 75), (100, 75), (100, 100),
+             (150, 100), (150, 150), (200, 150), (200, 200)]
+EXTRA_SIZES = [(300, 100), (50, 100)]
 
-# =====================================================================================
-#  SMALL HELPERS
-# =====================================================================================
-def mm(value):
-    """millimetres -> Revit internal units (feet)."""
-    return UnitUtils.ConvertToInternalUnits(float(value), UnitTypeId.Millimeters)
+DEFAULT_W = 100.0
+DEFAULT_H = 100.0
+STUB_MM = 75.0            # straight stub length  -> CenterToEnd = W/2 + 75
+FLANGE_MM = 25.0          # coupling tab length (Flange_Length)
+HOLE_D_MM = 6.0           # coupling tab screw hole diameter (Hole_Diameter)
+SCREW_D_MM = 8.0          # cover screw head diameter (M5/M6 pan head)
+SCREW_H_MM = 3.0          # cover screw head protrusion above the cover
+SCREW_END_MM = 15.0       # screw centre distance to the port edge
+SCREW_SIDE_MM = 10.0      # screw centre distance to the side wall (inner face line)
 
+SQRT2 = math.sqrt(2.0)
+TOL_MM = 0.5              # flexing tolerance
+TOL_FT = 1.0e-5           # geometric matching tolerance (feet)
+PLANE_EXTENT_MM = 450.0   # visual half-length of the reference planes
+DIM_BASE_MM = 260.0       # dimension line offset
+DIM_STEP_MM = 18.0
 
-def to_mm(value):
-    """Revit internal units -> millimetres."""
-    return UnitUtils.ConvertFromInternalUnits(float(value), UnitTypeId.Millimeters)
+# Revit formula (no "<=" in Revit formulas -> not(x > limit)); T10 / T12 / T14 / T16
+WALL_FORMULA = ("if(and(not(Width > 50 mm), not(Height > 50 mm)), 1.0 mm, "
+                "if(and(not(Width > 100 mm), not(Height > 75 mm)), 1.2 mm, "
+                "if(and(not(Width > 150 mm), not(Height > 100 mm)), 1.4 mm, 1.6 mm)))")
 
+# PartType: cable-tray fittings use the Channel/Ladder part types. "Elbow" (5) is the duct/pipe one and is only
+# kept as the last fallback. The first value that Revit accepts (read-back verified) is used.
+PART_TYPE_CANDIDATES = ("ChannelCableTrayElbow", "Elbow")
 
-def pt(x_mm, y_mm, z_mm=0.0):
-    return XYZ(mm(x_mm), mm(y_mm), mm(z_mm))
+# CONNECTOR_ANGLE is the connector's own "Angle" property; binding the 90-deg family angle to it could be read as
+# a connector rotation and swap width/height. Disabled by default - set True only if you know you need it.
+BIND_CONNECTOR_ANGLE = False
 
+LOD_BODY = (False, True, True)      # Coarse / Medium / Fine : U-body + cover
+LOD_FINE = (False, False, True)     # tabs + screws          : Fine only
+LOD_CENTER = (True, False, False)   # 2D centre line         : Coarse only
 
-def eid(value):
-    """ElementId from a 64-bit integer (Revit 2024+ signature)."""
-    return ElementId(Int64(int(value)))
-
-
-def fmt_xyz(p):
-    return '({0:.2f}, {1:.2f}, {2:.2f})'.format(to_mm(p.X), to_mm(p.Y), to_mm(p.Z))
-
-
-def resolve_group(*names):
-    """Return the first GroupTypeId member that exists (e.g. 'Dimensions' -> 'Geometry')."""
-    for name in names:
-        member = getattr(GroupTypeId, name, None)
-        if member is not None:
-            return member
-    return GroupTypeId.Geometry
+LAST_FAILURES = []
 
 
 def wall_thickness_mm(w, h):
-    """Python mirror of WALL_THICKNESS_FORMULA (T10 / T12 / T14 / T16)."""
-    if w <= 50 and h <= 50:
+    """Python twin of the Revit WallThickness formula (T10/T12/T14/T16)."""
+    if (not w > 50) and (not h > 50):
         return 1.0
-    if w <= 100 and h <= 75:
+    if (not w > 100) and (not h > 75):
         return 1.2
-    if w <= 150 and h <= 100:
+    if (not w > 150) and (not h > 100):
         return 1.4
     return 1.6
 
 
-def outline_vertices(kind, w, stub):
-    """Closed outer outline of the bend in plan (mm).  Mitre = 5 vertices, Sharp = 6 vertices."""
-    half = w / 2.0
-    cte = half + stub
-    pts = [(-half, -half),      # P1 outer corner, full right angle
-           (cte, -half),        # P2 port 1 outer
-           (cte, half)]         # P3 port 1 inner
-    if kind == 'sharp':
-        pts.append((half, half))    # inner square corner (sharp bend only)
-    pts.append((half, cte))     # P4 port 2 inner  (mitre: P3->P4 is the 45 deg chamfer)
-    pts.append((-half, cte))    # P5 port 2 outer
-    return pts
+def mm(v):
+    return UnitUtils.ConvertToInternalUnits(float(v), UnitTypeId.Millimeters)
 
 
-def cavity_vertices(kind, w, stub, t):
-    """Cable space (void) outline: wall thickness t on outer / inner walls, open at both ports."""
-    half = w / 2.0
-    cte = half + stub
-    if kind == 'mitre':
-        d = t * math.sqrt(2.0)   # the chamfer wall is diagonal: its inner face sits t*sqrt(2) in along X/Y
-        return [(-half + t, -half + t), (cte, -half + t), (cte, half - d),
-                (half - d, cte), (-half + t, cte)]
-    return [(-half + t, -half + t), (cte, -half + t), (cte, half - t),
-            (half - t, half - t), (half - t, cte), (-half + t, cte)]
+def to_mm(v):
+    return UnitUtils.ConvertFromInternalUnits(float(v), UnitTypeId.Millimeters)
 
 
-def tab_rectangles(port, w, stub, t, flange):
-    """Two thin coupling tabs per port, sitting just inside the walls, beyond the port face."""
-    half = w / 2.0
-    cte = half + stub
-    if port == 1:
-        return [[(cte, -half + t), (cte + flange, -half + t), (cte + flange, -half + 2 * t), (cte, -half + 2 * t)],
-                [(cte, half - 2 * t), (cte + flange, half - 2 * t), (cte + flange, half - t), (cte, half - t)]]
-    return [[(-half + t, cte), (-half + 2 * t, cte), (-half + 2 * t, cte + flange), (-half + t, cte + flange)],
-            [(half - 2 * t, cte), (half - t, cte), (half - t, cte + flange), (half - 2 * t, cte + flange)]]
-
-
-def expected_values(kind, w, h, stub=DEFAULT_STUB):
-    return {
-        'A': w + stub,
-        'B': w + stub,
-        'C': stub * math.sqrt(2.0) if kind == 'mitre' else stub,
-        'CenterToEnd': w / 2.0 + stub,
-        'T': wall_thickness_mm(w, h),
-    }
-
-
-def assert_single_type(fam_mgr, stage):
-    size = fam_mgr.Types.Size
-    if size != 1:
-        raise Exception('Single-type rule violated {0}: family has {1} types (expected exactly 1 "{2}")'
-                        .format(stage, size, TYPE_NAME))
-
-
-# =====================================================================================
-#  FAMILY LOAD OPTIONS (overwrite existing family + parameter values)
-# =====================================================================================
-class OverwriteFamilyLoadOptions(IFamilyLoadOptions):
-    def OnFamilyFound(self, familyInUse, overwriteParameterValues):
-        try:
-            overwriteParameterValues.Value = True
-        except Exception:
-            pass
-        return True
-
-    def OnSharedFamilyFound(self, sharedFamily, familyInUse, source, overwriteParameterValues):
-        try:
-            source.Value = FamilySource.Family
-            overwriteParameterValues.Value = True
-        except Exception:
-            pass
-        return True
-
-
-# =====================================================================================
-#  FAMILY BUILDER
-# =====================================================================================
-class BendFamilyBuilder(object):
-
-    def __init__(self, app, template_path, spec, out_dir):
-        self.app = app
-        self.template_path = template_path
-        self.spec = spec
-        self.kind = spec['kind']
-        self.out_dir = out_dir
-
-        self.doc = None
-        self.fm = None
-        self.factory = None
-        self.plan_view = None
-        self.elev_view = None
-        self.sketch_plane = None
-        self.material_id = ElementId.InvalidElementId
-
-        self.params = {}          # name -> FamilyParameter
-        self.planes = {}          # name -> ReferencePlane
-        self.plane_specs = {}     # name -> (unit normal XYZ, origin XYZ)   (design position)
-
-        self.body = None
-        self.void = None
-        self.cover = None
-        self.tabs = []
-        self.centerlines = []
-        self.host_plates = []
-        self.conn1 = None
-        self.conn2 = None
-        self.part_type_name = 'unknown'
-        self.part_type_value = None
-
-        # design values (mm) used while drawing at the default size 100 x 100
-        self.W = DEFAULT_W
-        self.H = DEFAULT_H
-        self.STUB = DEFAULT_STUB
-        self.FL = DEFAULT_FLANGE
-        self.T = wall_thickness_mm(self.W, self.H)
-
-        self.stats = {
-            'planes': 0, 'dimensions': 0, 'alignments_ok': 0, 'alignments_failed': 0,
-            'unmatched_lines': 0, 'z_lock': '', 'connector_host': '', 'warnings': [],
-            'centerline_lock': '',
-        }
-        self.flex_rows = []
-        self.flex_all_ok = False
-        self.saved_path = None
-        self.error = None
-
-    # ----------------------------------------------------------------- orchestration
-    def run(self):
-        self.doc = self.app.NewFamilyDocument(self.template_path)
-        if self.doc is None:
-            raise Exception('NewFamilyDocument returned None for template: ' + self.template_path)
-        try:
-            self.fm = self.doc.FamilyManager
-            self.factory = self.doc.FamilyCreate
-            self._tx('Setup family, parameters', self._setup)
-            self._tx('Reference planes, dimensions', self._datums)
-            self._tx('Geometry, connectors', self._geometry)
-            self._tx('Flex validation (single type)', self._flex)
-            assert_single_type(self.fm, 'before SaveAs')
-            self._save()
-        finally:
-            try:
-                self.doc.Close(False)
-            except Exception:
-                pass
-        return self
-
-    def _tx(self, name, action):
-        t = Transaction(self.doc, name)
-        t.Start()
-        try:
-            action()
-            t.Commit()
-        except Exception:
-            if t.HasStarted() and not t.HasEnded():
-                t.RollBack()
-            raise
-
-    def _warn(self, text):
-        self.stats['warnings'].append(text)
-        logger.warning('[{0}] {1}'.format(self.spec['file'], text))
-
-    def _resolve_part_type(self):
-        """Pick the cable tray elbow part type this Revit exposes.
-
-        TRUNKING_PART_TYPE overrides it (e.g. LadderCableTrayElbow for ladder
-        trays); the channel variant comes first because that is the tray type
-        these bends are drawn for.
-        """
-        candidates = []
-        override = os.environ.get('TRUNKING_PART_TYPE')
-        if override:
-            candidates.append(override)
-        candidates += ['ChannelCableTrayElbow', 'LadderCableTrayElbow',
-                       'CableTrayElbow', 'ChannelCableTrayVerticalElbow', 'Elbow']
-        for name in candidates:
-            value = getattr(PartType, name, None)
-            if value is not None:
-                return name, value
-        return 'unknown', None
-
-    def _record_routing_data(self):
-        """Record what Routing Preferences looks at: category, part type, connectors.
-
-        A family only appears under "Horizontal Bend" when its category is Cable
-        Tray Fittings, its Part Type is Elbow, it owns cable tray connectors and
-        it is loaded in the project.
-        """
-        family = self.doc.OwnerFamily
-        try:
-            category = family.FamilyCategory
-            self.stats['category'] = str(category.Name) if category is not None else 'none'
-        except Exception:
-            self.stats['category'] = '?'
-        value = -1
-        try:
-            parameter = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
-            if parameter is not None:
-                value = parameter.AsInteger()
-        except Exception:
-            pass
-        expected = None
-        try:
-            expected = int(self.part_type_value)
-        except Exception:
-            pass
-        if expected is not None and value == expected:
-            self.stats['part_type'] = str(self.part_type_name)
-        else:
-            self.stats['part_type'] = 'value {0} (wanted {1} = {2})'.format(
-                value, self.part_type_name, expected)
-
-    def _collapse_to_one_type(self):
-        """Delete every family type except the one named "Standard".
-
-        A deleted FamilyType is a dead proxy, so its Name is read before the
-        delete, never after.
-        """
-        while self.fm.Types.Size > 1:
-            victim = None
-            for candidate in self.fm.Types:
-                if str(candidate.Name) != TYPE_NAME:
-                    victim = candidate
-                    break
-            if victim is None:
-                break
-            self.fm.CurrentType = victim
-            self.fm.DeleteCurrentType()
-        for candidate in self.fm.Types:
-            if str(candidate.Name) == TYPE_NAME:
-                self.fm.CurrentType = candidate
-                break
-
-    # ----------------------------------------------------------------- 1. setup
-    def _setup(self):
-        doc = self.doc
-        family = doc.OwnerFamily
-
-        cat = Category.GetCategory(doc, BuiltInCategory.OST_CableTrayFitting)
-        if cat is not None:
-            current = family.FamilyCategory
-            if current is None or current.Id.Value != cat.Id.Value:
-                family.FamilyCategory = cat
-
-        # Part Type = Elbow is what puts the family under "Horizontal Bend" in
-        # Routing Preferences - but for Cable Tray Fittings the generic Elbow is
-        # not that value: the tray variants are ChannelCableTrayElbow /
-        # LadderCableTrayElbow. The generic one leaves the family unclassified,
-        # which is why it never showed up in the list.
-        self.part_type_name, self.part_type_value = self._resolve_part_type()
-        part_type = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
-        set_ok = False
-        if part_type is not None and not part_type.IsReadOnly:
-            try:
-                part_type.Set(int(self.part_type_value))
-                set_ok = True
-            except Exception as ex:
-                self._warn('Part Type via FAMILY_CONTENT_PART_TYPE failed: {0}'.format(ex))
-        if not set_ok:
-            try:
-                family.FamilyContentPartType = self.part_type_value
-                set_ok = True
-            except Exception as ex:
-                self._warn('Part Type could not be set (FamilyContentPartType): {0}'.format(ex))
-        self._record_routing_data()
-
-        # exactly ONE type named "Standard". The Metric Cable Tray Fitting
-        # template ships three, so the extras are deleted instead of assumed away.
-        if self.fm.Types.Size == 0:
-            self.fm.NewType(TYPE_NAME)           # the one and only type of this family
-        else:
-            if str(self.fm.CurrentType.Name) != TYPE_NAME:
-                try:
-                    self.fm.RenameCurrentType(TYPE_NAME)
-                except Exception:
-                    pass
-            self._collapse_to_one_type()
-        assert_single_type(self.fm, 'after setup')
-
-        self._find_views()
-        self._find_center_planes()
-        self.sketch_plane = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, XYZ.Zero))
-        self._create_material()
-        self._create_parameters()
-        self._set_identity()
-
-    def _find_views(self):
-        plan = None
-        elevations = []
-        for view in FilteredElementCollector(self.doc).OfClass(View):
-            try:
-                if view.IsTemplate:
-                    continue
-                vtype = view.ViewType
-            except Exception:
-                continue
-            if vtype == ViewType.FloorPlan and plan is None:
-                plan = view
-            elif vtype == ViewType.Elevation and abs(view.ViewDirection.Z) < 1e-6:
-                elevations.append(view)
-        if plan is None:
-            raise Exception('No floor plan view (Ref. Level) found in the family template')
-        # prefer Front / Back (looking along Y) so the X axis is horizontal on screen
-        elevations.sort(key=lambda v: 0 if abs(v.ViewDirection.Y) > 0.9 else 1)
-        self.plan_view = plan
-        self.elev_view = elevations[0] if elevations else None
-        if self.elev_view is None:
-            self._warn('No elevation view in template: Z faces will be driven by Extrusion Start/End parameters')
-
-    def _register_plane(self, name, plane, normal, origin):
-        self.planes[name] = plane
-        self.plane_specs[name] = (normal, origin)
-        self.stats['planes'] += 1
-        return plane
-
-    def _find_center_planes(self):
-        """Locate the template origin planes by geometry (locale independent)."""
-        tol = mm(0.01)
-        best_lr = None
-        best_fb = None
-        for rp in FilteredElementCollector(self.doc).OfClass(ReferencePlane):
-            try:
-                n = rp.Normal
-                o = rp.GetPlane().Origin
-            except Exception:
-                continue
-            if abs(abs(n.X) - 1.0) < 1e-6 and abs(o.X) < tol:
-                if best_lr is None or (rp.Pinned and not best_lr.Pinned):
-                    best_lr = rp
-            elif abs(abs(n.Y) - 1.0) < 1e-6 and abs(o.Y) < tol:
-                if best_fb is None or (rp.Pinned and not best_fb.Pinned):
-                    best_fb = rp
-        if best_lr is None:
-            best_lr = self._new_vplane('Center (Left/Right)', 'x', 0.0, register=False)
-            best_lr.Pinned = True
-        if best_fb is None:
-            best_fb = self._new_vplane('Center (Front/Back)', 'y', 0.0, register=False)
-            best_fb.Pinned = True
-        self._register_plane('Center_LR', best_lr, XYZ.BasisX, XYZ.Zero)
-        self._register_plane('Center_FB', best_fb, XYZ.BasisY, XYZ.Zero)
-
-    def _create_material(self):
-        name = 'Galvanized Steel - Trunking'
-        for mat in FilteredElementCollector(self.doc).OfClass(Material):
-            if mat.Name == name:
-                self.material_id = mat.Id
-                return
-        mat_id = Material.Create(self.doc, name)
-        mat = self.doc.GetElement(mat_id)
-        try:
-            mat.Color = Color(176, 184, 192)
-            mat.Shininess = 96
-            mat.Smoothness = 80
-        except Exception:
-            pass
-        self.material_id = mat_id
-
-    def _find_param(self, name):
-        """Family parameter by name.
-
-        FamilyManager.GetParameter() only takes a ForgeTypeId in Revit 2027, so
-        the name has to be looked up by scanning the collection.
-        """
-        for parameter in self.fm.Parameters:
-            try:
-                if str(parameter.Definition.Name) == name:
-                    return parameter
-            except Exception:
-                continue
-        return None
-
-    def _add_param(self, name, group, spec_type, value=None, formula=None):
-        p = self._find_param(name)
-        if p is None:
-            p = self.fm.AddParameter(name, group, spec_type, True)      # is_instance = True
-        elif not p.IsInstance:
-            self.fm.MakeInstance(p)
-        if formula is not None:
-            self.fm.SetFormula(p, formula)
-        elif value is not None:
-            self.fm.Set(p, value)
-        self.params[name] = p
-        return p
-
-    def _create_parameters(self):
-        g_dim = resolve_group('Dimensions', 'Geometry')      # UI group "Dimensions" == GroupTypeId.Geometry
-        g_vis = GroupTypeId.Visibility
-        g_id = resolve_group('IdentityData', 'Geometry')
-        g_mat = resolve_group('Materials', 'Geometry')
-        length = SpecTypeId.Length
-
-        # --- user inputs (all instance) ---
-        self._add_param('Width', g_dim, length, value=mm(self.W))
-        self._add_param('Height', g_dim, length, value=mm(self.H))
-        self._add_param('Angle', g_dim, SpecTypeId.Angle, value=math.radians(90.0))
-        self._add_param('Stub', g_dim, length, value=mm(self.STUB))
-        self._add_param('Flange_Length', g_dim, length, value=mm(self.FL))
-
-        # --- derived (formula driven, all instance) ---
-        self._add_param('CenterToEnd', g_dim, length, formula='Width / 2 + Stub')
-        self._add_param('Half_Width', g_dim, length, formula='Width / 2')
-        self._add_param('Half_Height', g_dim, length, formula='Height / 2')
-        self._add_param('WallThickness', g_dim, length, formula=WALL_THICKNESS_FORMULA)
-        self._add_param('Z_Bottom', g_dim, length, formula='0 mm - Half_Height')
-        self._add_param('Z_Floor', g_dim, length, formula='Z_Bottom + WallThickness')
-        self._add_param('Z_Cover_Top', g_dim, length, formula='Half_Height + WallThickness')
-        self._add_param('Z_Tab_Bottom', g_dim, length, formula='Z_Floor + {0} mm'.format(TAB_CLEARANCE))
-        self._add_param('Z_Tab_Top', g_dim, length, formula='Half_Height - {0} mm'.format(TAB_CLEARANCE))
-        self._add_param('A_Length', g_dim, length, formula='Width + Stub')
-        self._add_param('B_Length', g_dim, length, formula='Width + Stub')
-        self._add_param('C_Length', g_dim, length, formula=self.spec['c_formula'])
-        if self.kind == 'mitre':
-            self._add_param('Mitre_Offset', g_dim, length, formula='(Width + Stub) / sqrt(2)')
-
-        # --- visibility / identity / material ---
-        self._add_param('Show_Cover', g_vis, SpecTypeId.Boolean.YesNo, value=1)
-        self._add_param('Show_Flanges', g_vis, SpecTypeId.Boolean.YesNo, value=1)
-        self._add_param('Cover_Type', g_id, SpecTypeId.String.Text, value='QT')
-        self._add_param('Material_Galvanized', g_mat, SpecTypeId.Reference.Material, value=self.material_id)
-
-    def _set_identity(self):
-        # these are Family (type) parameters, not FamilyManager ones: the
-        # Parameter returned by Family.get_Parameter takes the text directly.
-        owner = self.doc.OwnerFamily
-        for bip, text in ((BuiltInParameter.ALL_MODEL_DESCRIPTION, self.spec['description']),
-                          (BuiltInParameter.ALL_MODEL_TYPE_COMMENTS,
-                           'Single type "Standard" drives all sizes (instance parameters Width / Height)')):
-            try:
-                parameter = owner.get_Parameter(bip)
-                if parameter is not None and not parameter.IsReadOnly:
-                    parameter.Set(text)
-            except Exception:
-                pass
-
-    # ----------------------------------------------------------------- 2. datums
-    def _new_vplane(self, name, axis, offset_mm, register=True):
-        """Vertical reference plane in the plan view: axis 'x' -> normal X at x=offset, 'y' -> normal Y."""
-        half_len = mm(PLANE_HALF_LEN)
-        off = mm(offset_mm)
-        if axis == 'x':
-            bubble, free = XYZ(off, -half_len, 0.0), XYZ(off, half_len, 0.0)
-            normal, origin = XYZ.BasisX, XYZ(off, 0.0, 0.0)
-        else:
-            bubble, free = XYZ(-half_len, off, 0.0), XYZ(half_len, off, 0.0)
-            normal, origin = XYZ.BasisY, XYZ(0.0, off, 0.0)
-        rp = self.factory.NewReferencePlane(bubble, free, XYZ.BasisZ, self.plan_view)
-        try:
-            rp.Name = name
-        except Exception:
-            pass
-        if register:
-            self._register_plane(name, rp, normal, origin)
-        return rp
-
-    def _new_diag_plane(self, name, c_mm):
-        """Reference plane  x + y = c  (normal (1,1,0)/sqrt2) used for the mitre chamfer."""
-        half_len = mm(PLANE_HALF_LEN * 0.5)
-        c = mm(c_mm)
-        bubble = XYZ(c / 2.0 + half_len, c / 2.0 - half_len, 0.0)
-        free = XYZ(c / 2.0 - half_len, c / 2.0 + half_len, 0.0)
-        rp = self.factory.NewReferencePlane(bubble, free, XYZ.BasisZ, self.plan_view)
-        try:
-            rp.Name = name
-        except Exception:
-            pass
-        normal = XYZ(1.0, 1.0, 0.0).Normalize()
-        return self._register_plane(name, rp, normal, XYZ(c / 2.0, c / 2.0, 0.0))
-
-    def _new_hplane(self, name, z_mm):
-        """Horizontal reference plane created in the elevation view."""
-        view = self.elev_view
-        right = view.RightDirection
-        z = mm(z_mm)
-        half_len = mm(PLANE_HALF_LEN)
-        bubble = right.Multiply(-half_len).Add(XYZ(0.0, 0.0, z))
-        free = right.Multiply(half_len).Add(XYZ(0.0, 0.0, z))
-        rp = self.factory.NewReferencePlane(bubble, free, view.ViewDirection, view)
-        try:
-            rp.Name = name
-        except Exception:
-            pass
-        return self._register_plane(name, rp, XYZ.BasisZ, XYZ(0.0, 0.0, z))
-
-    def _dim(self, name_a, name_b, axis, offset_mm, label):
-        """Labelled linear dimension between two parallel reference planes.
-
-        A reference taken from a plane created in the same transaction is not
-        usable until the document has regenerated ("The references are not
-        geometric references"), and the view matters too, so this regenerates,
-        retries in the active view, and records a warning instead of aborting
-        the whole family on one bad dimension.
-        """
-        rp_a, rp_b = self.planes[name_a], self.planes[name_b]
-        oa = self.plane_specs[name_a][1]
-        ob = self.plane_specs[name_b][1]
-        off = mm(offset_mm)
-        if axis == 'x':
-            view = self.plan_view
-            pa, pb = XYZ(oa.X, off, 0.0), XYZ(ob.X, off, 0.0)
-        elif axis == 'y':
-            view = self.plan_view
-            pa, pb = XYZ(off, oa.Y, 0.0), XYZ(off, ob.Y, 0.0)
-        elif axis == 'z':
-            view = self.elev_view
-            right = view.RightDirection
-            pa = right.Multiply(off).Add(XYZ(0.0, 0.0, oa.Z))
-            pb = right.Multiply(off).Add(XYZ(0.0, 0.0, ob.Z))
-        else:   # 'diag' : line through both plane origins (direction (1,1,0))
-            view = self.plan_view
-            pa, pb = oa, ob
-
-        views = [view]
-        try:
-            active = self.doc.ActiveView
-            if active is not None and active.Id.Value != view.Id.Value:
-                views.append(active)
-        except Exception:
-            pass
-
-        line = Line.CreateBound(pa, pb)
-        last_error = None
-        for candidate in views:
-            for _attempt in (1, 2):
-                try:
-                    self.doc.Regenerate()
-                except Exception:
-                    pass
-                try:
-                    refs = ReferenceArray()
-                    refs.Append(rp_a.GetReference())
-                    refs.Append(rp_b.GetReference())
-                    dim = self.factory.NewDimension(candidate, line, refs)
-                    dim.FamilyLabel = self.params[label]
-                    self.stats['dimensions'] += 1
-                    return dim
-                except Exception as ex:
-                    last_error = ex
-        self._warn('Dimension {0} -> {1} ({2}) skipped: {3}'.format(name_a, name_b, label, last_error))
-        return None
-
-    def _datums(self):
-        W, H, T, S, FL = self.W, self.H, self.T, self.STUB, self.FL
-        h = W / 2.0
-        cte = h + S
-
-        for name, x in (('Outer_X', -h), ('Outer_X_In', -h + T), ('Outer_X_In2', -h + 2 * T),
-                        ('Inner_X_In2', h - 2 * T), ('Inner_X_In', h - T), ('Inner_X', h),
-                        ('Port1_End', cte), ('Port1_Tab_End', cte + FL)):
-            self._new_vplane(name, 'x', x)
-        for name, y in (('Outer_Y', -h), ('Outer_Y_In', -h + T), ('Outer_Y_In2', -h + 2 * T),
-                        ('Inner_Y_In2', h - 2 * T), ('Inner_Y_In', h - T), ('Inner_Y', h),
-                        ('Port2_End', cte), ('Port2_Tab_End', cte + FL)):
-            self._new_vplane(name, 'y', y)
-
-        # width / length chain (anchored on the pinned template centre planes)
-        self._dim('Center_LR', 'Outer_X', 'x', -h - 70, 'Half_Width')
-        self._dim('Center_LR', 'Inner_X', 'x', -h - 90, 'Half_Width')
-        self._dim('Center_FB', 'Outer_Y', 'y', -h - 70, 'Half_Width')
-        self._dim('Center_FB', 'Inner_Y', 'y', -h - 90, 'Half_Width')
-        self._dim('Center_LR', 'Port1_End', 'x', -h - 110, 'CenterToEnd')
-        self._dim('Center_FB', 'Port2_End', 'y', -h - 110, 'CenterToEnd')
-        self._dim('Port1_End', 'Port1_Tab_End', 'x', -h - 130, 'Flange_Length')
-        self._dim('Port2_End', 'Port2_Tab_End', 'y', -h - 130, 'Flange_Length')
-
-        # wall thickness chain (automatic T10 / T12 / T14 / T16)
-        self._dim('Outer_X', 'Outer_X_In', 'x', cte + 30, 'WallThickness')
-        self._dim('Outer_X_In', 'Outer_X_In2', 'x', cte + 50, 'WallThickness')
-        self._dim('Inner_X_In', 'Inner_X', 'x', cte + 30, 'WallThickness')
-        self._dim('Inner_X_In2', 'Inner_X_In', 'x', cte + 50, 'WallThickness')
-        self._dim('Outer_Y', 'Outer_Y_In', 'y', cte + 30, 'WallThickness')
-        self._dim('Outer_Y_In', 'Outer_Y_In2', 'y', cte + 50, 'WallThickness')
-        self._dim('Inner_Y_In', 'Inner_Y', 'y', cte + 30, 'WallThickness')
-        self._dim('Inner_Y_In2', 'Inner_Y_In', 'y', cte + 50, 'WallThickness')
-
-        # mitre chamfer planes:  x + y = W + Stub  (outer face)  and  x + y = W + Stub - T*sqrt2 (inner face)
-        if self.kind == 'mitre':
-            c = W + S
-            anchor = self._new_diag_plane('Diag_Origin', 0.0)
-            anchor.Pinned = True
-            self._new_diag_plane('Mitre_Plane', c)
-            self._new_diag_plane('Mitre_In', c - T * math.sqrt(2.0))
-            self._dim('Diag_Origin', 'Mitre_Plane', 'diag', 0.0, 'Mitre_Offset')
-            self._dim('Mitre_Plane', 'Mitre_In', 'diag', 0.0, 'WallThickness')
-
-        # height planes (elevation)
-        if self.elev_view is not None:
-            center_z = self._new_hplane('Center_Z', 0.0)
-            center_z.Pinned = True
-            self._new_hplane('Top', H / 2.0)
-            self._new_hplane('Bottom', -H / 2.0)
-            self._dim('Center_Z', 'Top', 'z', -h - 70, 'Half_Height')
-            self._dim('Center_Z', 'Bottom', 'z', -h - 90, 'Half_Height')
-
-    # ----------------------------------------------------------------- 3. geometry helpers
-    def _profile(self, loops):
-        prof = CurveArrArray()
-        for loop in loops:
-            arr = CurveArray()
-            n = len(loop)
-            for i in range(n):
-                a = loop[i]
-                b = loop[(i + 1) % n]
-                arr.Append(Line.CreateBound(pt(a[0], a[1]), pt(b[0], b[1])))
-            prof.Append(arr)
-        return prof
-
-    def _set_z_range(self, ext, z0, z1):
-        """Set Extrusion Start / End (internal units) keeping start < end at every step."""
-        if z0 < ext.StartOffset:
-            ext.StartOffset = z0
-            ext.EndOffset = z1
-        else:
-            ext.EndOffset = z1
-            ext.StartOffset = z0
-
-    def _new_extrusion(self, loops, is_solid, z0_mm, z1_mm):
-        depth = mm(max(z1_mm - z0_mm, 1.0))
-        ext = self.factory.NewExtrusion(is_solid, self._profile(loops), self.sketch_plane, depth)
-        self._set_z_range(ext, mm(z0_mm), mm(z1_mm))
-        return ext
-
-    def _associate(self, element, bip, param_name):
-        p = element.get_Parameter(bip)
-        if p is None:
-            raise Exception('Parameter {0} not found on element {1}'.format(bip, element.Id.Value))
-        self.fm.AssociateElementParameterToFamilyParameter(p, self.params[param_name])
-
-    def _associate_z(self, ext, start_param, end_param):
-        self._associate(ext, BuiltInParameter.EXTRUSION_START_PARAM, start_param)
-        self._associate(ext, BuiltInParameter.EXTRUSION_END_PARAM, end_param)
-
-    def _set_visibility(self, element, coarse, medium, fine):
-        # Revit 2027 has FamilyElementVisibility(VisibilityType), not the older
-        # FamilyElementVisibilitySettings; the axis flags default to off.
-        settings = FamilyElementVisibility(FamilyElementVisibilityType.Model)
-        settings.IsShownInCoarse = coarse
-        settings.IsShownInMedium = medium
-        settings.IsShownInFine = fine
-        settings.IsShownInTopBottom = True
-        settings.IsShownInFrontBack = True
-        settings.IsShownInLeftRight = True
-        element.SetVisibility(settings)
-
-    def _sketch_curve_refs(self, ext):
-        """[(Curve, Reference)] for every sketch line of an extrusion."""
-        result = []
-        sketch = ext.Sketch
-        try:
-            for element_id in sketch.GetAllElements():
-                el = self.doc.GetElement(element_id)
-                if isinstance(el, CurveElement):
-                    gc = el.GeometryCurve
-                    if gc is not None and gc.Reference is not None:
-                        result.append((gc, gc.Reference))
-        except Exception:
-            result = []
-        if not result:
-            for arr in sketch.Profile:
-                for curve in arr:
-                    if curve.Reference is not None:
-                        result.append((curve, curve.Reference))
-        return result
-
-    def _align_sketch(self, ext, plane_names, view=None, quiet_unmatched=False):
-        """Lock every sketch line onto the reference plane it was drawn on (NewAlignment)."""
-        view = view or self.plan_view
-        tol = mm(MATCH_TOL_MM)
-        specs = [(n, self.planes[n], self.plane_specs[n]) for n in plane_names if n in self.planes]
-        for curve, ref in self._sketch_curve_refs(ext):
-            p0 = curve.GetEndPoint(0)
-            p1 = curve.GetEndPoint(1)
-            matched = False
-            for name, rp, (normal, origin) in specs:
-                if abs(p0.Subtract(origin).DotProduct(normal)) < tol and \
-                   abs(p1.Subtract(origin).DotProduct(normal)) < tol:
-                    matched = True
-                    try:
-                        self.factory.NewAlignment(view, rp.GetReference(), ref)
-                        self.stats['alignments_ok'] += 1
-                    except Exception as ex:
-                        self.stats['alignments_failed'] += 1
-                        self._warn('Alignment failed: line {0}-{1} -> {2}: {3}'
-                                   .format(fmt_xyz(p0), fmt_xyz(p1), name, ex))
-                    break
-            if not matched and not quiet_unmatched:
-                self.stats['unmatched_lines'] += 1
-                self._warn('Sketch line {0}-{1} matched no reference plane'.format(fmt_xyz(p0), fmt_xyz(p1)))
-
-    def _find_planar_face(self, element, normal):
-        """Planar face of the element whose normal equals `normal`, farthest along that normal."""
-        opt = Options()
-        opt.ComputeReferences = True
-        opt.IncludeNonVisibleObjects = True
-        opt.DetailLevel = ViewDetailLevel.Fine
-        geo = element.get_Geometry(opt)
-        best = None
-        best_d = None
-        if geo is None:
-            return None
-        solids = []
-        for obj in geo:
-            if isinstance(obj, Solid):
-                solids.append(obj)
-            elif isinstance(obj, GeometryInstance):
-                for inner in obj.GetInstanceGeometry():
-                    if isinstance(inner, Solid):
-                        solids.append(inner)
-        for solid in solids:
-            if solid.Faces.Size == 0:
-                continue
-            for face in solid.Faces:
-                if not isinstance(face, PlanarFace):
-                    continue
-                if face.FaceNormal.DotProduct(normal) < 0.999:
-                    continue
-                d = face.Origin.DotProduct(normal)
-                if best is None or d > best_d:
-                    best, best_d = face, d
-        return best
-
-    # ----------------------------------------------------------------- 3. geometry
-    def _geometry(self):
-        self._create_body()
-        self._lock_body_z()
-        self._create_cavity_void()
-        self._create_connectors()
-        self._create_cover()
-        self._create_tabs()
-        self._create_centerlines()
-
-    def _create_body(self):
-        W, H, S = self.W, self.H, self.STUB
-        outline = outline_vertices(self.kind, W, S)
-        self.body = self._new_extrusion([outline], True, -H / 2.0, H / 2.0)
-        self.doc.Regenerate()
-        self._align_sketch(self.body, ['Outer_X', 'Outer_Y', 'Inner_X', 'Inner_Y',
-                                       'Port1_End', 'Port2_End', 'Mitre_Plane'])
-        self._set_visibility(self.body, False, True, True)      # coarse: centre line only
-        self._associate(self.body, BuiltInParameter.MATERIAL_ID_PARAM, 'Material_Galvanized')
-
-    def _lock_body_z(self):
-        """Lock the top / bottom faces onto the Top / Bottom reference planes (driven by Half_Height).
-        Falls back to associating Extrusion Start / End when the alignment cannot be created."""
-        if self.elev_view is not None and 'Top' in self.planes and 'Bottom' in self.planes:
-            made = []
-            try:
-                self.doc.Regenerate()
-                top_face = self._find_planar_face(self.body, XYZ.BasisZ)
-                bottom_face = self._find_planar_face(self.body, XYZ.BasisZ.Negate())
-                if top_face is None or bottom_face is None:
-                    raise Exception('top / bottom face not found')
-                made.append(self.factory.NewAlignment(self.elev_view, self.planes['Top'].GetReference(),
-                                                      top_face.Reference))
-                made.append(self.factory.NewAlignment(self.elev_view, self.planes['Bottom'].GetReference(),
-                                                      bottom_face.Reference))
-                self.stats['alignments_ok'] += 2
-                self.stats['z_lock'] = 'NewAlignment: top/bottom faces -> Top/Bottom planes (Half_Height)'
-                return
-            except Exception as ex:
-                for d in made:
-                    try:
-                        self.doc.Delete(d.Id)
-                    except Exception:
-                        pass
-                self._warn('Face alignment to Top/Bottom failed ({0}); using Extrusion Start/End association'
-                           .format(ex))
-        self._associate_z(self.body, 'Z_Bottom', 'Half_Height')
-        self.stats['z_lock'] = 'Extrusion Start/End <- Z_Bottom / Half_Height'
-
-    def _create_cavity_void(self):
-        W, H, T, S = self.W, self.H, self.T, self.STUB
-        cavity = cavity_vertices(self.kind, W, S, T)
-        # void from the top of the floor plate to the top of the walls -> U channel open at both ports
-        self.void = self._new_extrusion([cavity], False, -H / 2.0 + T, H / 2.0)
-        self.doc.Regenerate()
-        self._align_sketch(self.void, ['Outer_X_In', 'Outer_Y_In', 'Inner_X_In', 'Inner_Y_In',
-                                       'Port1_End', 'Port2_End', 'Mitre_In'])
-        self._associate_z(self.void, 'Z_Floor', 'Half_Height')
-
-    def _connector_expected(self, port):
-        cte = self.W / 2.0 + self.STUB
-        return pt(cte, 0.0) if port == 1 else pt(0.0, cte)
-
-    def _connector_centered(self, conn, port):
-        try:
-            return conn.Origin.DistanceTo(self._connector_expected(port)) < mm(TOL_MM)
-        except Exception:
-            return False
-
-    def _create_host_plate(self, port):
-        """Invisible 1 mm plate flush with the port face; only used if Revit does not centre the
-        connector on the U-shaped end face.  Fully constrained (planes + locked dimension)."""
-        W, H, S = self.W, self.H, self.STUB
-        h = W / 2.0
-        cte = h + S
-        if port == 1:
-            rect = [(cte - 1.0, -h), (cte, -h), (cte, h), (cte - 1.0, h)]
-            planes = ['Port1_End', 'Outer_Y', 'Inner_Y']
-            port_plane, axis = self.planes['Port1_End'], 'x'
-        else:
-            rect = [(-h, cte - 1.0), (h, cte - 1.0), (h, cte), (-h, cte)]
-            planes = ['Port2_End', 'Outer_X', 'Inner_X']
-            port_plane, axis = self.planes['Port2_End'], 'y'
-        plate = self._new_extrusion([rect], True, -H / 2.0, H / 2.0)
-        self.doc.Regenerate()
-        self._align_sketch(plate, planes, quiet_unmatched=True)
-        # back line: locked 1 mm behind the port plane
-        for curve, ref in self._sketch_curve_refs(plate):
-            p0, p1 = curve.GetEndPoint(0), curve.GetEndPoint(1)
-            coord0 = p0.X if axis == 'x' else p0.Y
-            coord1 = p1.X if axis == 'x' else p1.Y
-            if abs(coord0 - mm(cte - 1.0)) < mm(MATCH_TOL_MM) and abs(coord1 - mm(cte - 1.0)) < mm(MATCH_TOL_MM):
-                refs = ReferenceArray()
-                refs.Append(port_plane.GetReference())
-                refs.Append(ref)
-                if axis == 'x':
-                    line = Line.CreateBound(pt(cte, -h - 20.0), pt(cte - 1.0, -h - 20.0))
-                else:
-                    line = Line.CreateBound(pt(-h - 20.0, cte), pt(-h - 20.0, cte - 1.0))
-                try:
-                    dim = self.factory.NewDimension(self.plan_view, line, refs)
-                    dim.IsLocked = True
-                    self.stats['dimensions'] += 1
-                except Exception as ex:
-                    self._warn('Host plate back line lock failed: {0}'.format(ex))
-                break
-        self._associate_z(plate, 'Z_Bottom', 'Half_Height')
-        try:
-            plate.get_Parameter(BuiltInParameter.IS_VISIBLE_PARAM).Set(0)
-        except Exception:
-            pass
-        self.host_plates.append(plate)
-        return plate
-
-    def _bind_connector(self, conn):
-        self._associate(conn, BuiltInParameter.CONNECTOR_WIDTH, 'Width')
-        self._associate(conn, BuiltInParameter.CONNECTOR_HEIGHT, 'Height')
-        try:
-            self._associate(conn, BuiltInParameter.CONNECTOR_ANGLE, 'Angle')
-        except Exception as ex:
-            self._warn('CONNECTOR_ANGLE association skipped: {0}'.format(ex))
-
-    def _create_connectors(self):
-        """Two rectangular cable tray connectors on the port faces (+X and +Y), normals pointing out."""
-        self.doc.Regenerate()
-        face1 = self._find_planar_face(self.body, XYZ.BasisX)
-        face2 = self._find_planar_face(self.body, XYZ.BasisY)
-        if face1 is None or face2 is None:
-            raise Exception('Port end faces (+X / +Y) not found on the body extrusion')
-        self.conn1 = ConnectorElement.CreateCableTrayConnector(self.doc, face1.Reference)
-        self.conn2 = ConnectorElement.CreateCableTrayConnector(self.doc, face2.Reference)
-        self.doc.Regenerate()
-        self.stats['connector_host'] = 'body port faces (U section)'
-
-        if not (self._connector_centered(self.conn1, 1) and self._connector_centered(self.conn2, 2)):
-            self._warn('Connector not centred on the open U face; re-hosting on invisible full-size port plates')
-            for conn in (self.conn1, self.conn2):
-                try:
-                    self.doc.Delete(conn.Id)
-                except Exception:
-                    pass
-            plate1 = self._create_host_plate(1)
-            plate2 = self._create_host_plate(2)
-            self.doc.Regenerate()
-            face1 = self._find_planar_face(plate1, XYZ.BasisX)
-            face2 = self._find_planar_face(plate2, XYZ.BasisY)
-            self.conn1 = ConnectorElement.CreateCableTrayConnector(self.doc, face1.Reference)
-            self.conn2 = ConnectorElement.CreateCableTrayConnector(self.doc, face2.Reference)
-            self.doc.Regenerate()
-            self.stats['connector_host'] = 'invisible full-size port plates'
-
-        self._bind_connector(self.conn1)
-        self._bind_connector(self.conn2)
-        self.conn1.SetLinkedConnectorElement(self.conn2)
-        try:
-            if not self.conn1.IsPrimary:
-                self.conn1.AssignAsPrimary()
-        except Exception:
-            pass
-        self.stats['connectors'] = len([c for c in (self.conn1, self.conn2) if c is not None])
-        details = []
-        for index, conn in enumerate((self.conn1, self.conn2), 1):
-            if conn is None:
-                details.append('c{0}: missing'.format(index))
-                continue
-            try:
-                details.append('c{0}: domain={1} shape={2}'.format(index, conn.Domain, conn.Shape))
-            except Exception as ex:
-                details.append('c{0}: {1}'.format(index, ex))
-        self.stats['connector_detail'] = '; '.join(details)
-
-    def _create_cover(self):
-        W, H, T, S = self.W, self.H, self.T, self.STUB
-        outline = outline_vertices(self.kind, W, S)
-        self.cover = self._new_extrusion([outline], True, H / 2.0, H / 2.0 + T)
-        self.doc.Regenerate()
-        self._align_sketch(self.cover, ['Outer_X', 'Outer_Y', 'Inner_X', 'Inner_Y',
-                                        'Port1_End', 'Port2_End', 'Mitre_Plane'])
-        self._associate_z(self.cover, 'Half_Height', 'Z_Cover_Top')
-        self._associate(self.cover, BuiltInParameter.IS_VISIBLE_PARAM, 'Show_Cover')
-        self._associate(self.cover, BuiltInParameter.MATERIAL_ID_PARAM, 'Material_Galvanized')
-        self._set_visibility(self.cover, False, True, True)
-
-    def _create_tabs(self):
-        W, H, T, S, FL = self.W, self.H, self.T, self.STUB, self.FL
-        z0 = -H / 2.0 + T + TAB_CLEARANCE
-        z1 = H / 2.0 - TAB_CLEARANCE
-        plane_sets = {
-            1: ['Port1_End', 'Port1_Tab_End', 'Outer_Y_In', 'Outer_Y_In2', 'Inner_Y_In', 'Inner_Y_In2'],
-            2: ['Port2_End', 'Port2_Tab_End', 'Outer_X_In', 'Outer_X_In2', 'Inner_X_In', 'Inner_X_In2'],
-        }
-        for port in (1, 2):
-            tab = self._new_extrusion(tab_rectangles(port, W, S, T, FL), True, z0, z1)
-            self.doc.Regenerate()
-            self._align_sketch(tab, plane_sets[port])
-            self._associate_z(tab, 'Z_Tab_Bottom', 'Z_Tab_Top')
-            self._associate(tab, BuiltInParameter.IS_VISIBLE_PARAM, 'Show_Flanges')
-            self._associate(tab, BuiltInParameter.MATERIAL_ID_PARAM, 'Material_Galvanized')
-            self._set_visibility(tab, False, False, True)      # fine only
-            self.tabs.append(tab)
-
-    def _create_centerlines(self):
-        """Coarse detail level: 2D centre line  port1 -> origin -> port2 (model lines)."""
-        cte = self.W / 2.0 + self.STUB
-        specs = ((pt(cte, 0.0), XYZ.Zero, 'Center_FB', 'Center_LR', 'x'),
-                 (pt(0.0, cte), XYZ.Zero, 'Center_LR', 'Center_FB', 'y'))
-        locked = 0
-        for p_end, p_origin, on_plane, from_plane, axis in specs:
-            line = self.factory.NewModelCurve(Line.CreateBound(p_end, p_origin), self.sketch_plane)
-            self.centerlines.append(line)
-            self.doc.Regenerate()
-            try:
-                self._set_visibility(line, True, False, False)
-            except Exception as ex:
-                self._warn('Centre line visibility settings not applied: {0}'.format(ex))
-            # keep the line on the centre plane
-            try:
-                self.factory.NewAlignment(self.plan_view, self.planes[on_plane].GetReference(),
-                                          line.GeometryCurve.Reference)
-                self.stats['alignments_ok'] += 1
-            except Exception as ex:
-                self._warn('Centre line alignment skipped: {0}'.format(ex))
-            # drive the port end of the line with CenterToEnd (dimension to the curve end point)
-            try:
-                refs = ReferenceArray()
-                refs.Append(self.planes[from_plane].GetReference())
-                refs.Append(line.GeometryCurve.GetEndPointReference(0))
-                if axis == 'x':
-                    dim_line = Line.CreateBound(pt(0.0, -20.0), pt(cte, -20.0))
-                else:
-                    dim_line = Line.CreateBound(pt(-20.0, 0.0), pt(-20.0, cte))
-                dim = self.factory.NewDimension(self.plan_view, dim_line, refs)
-                dim.FamilyLabel = self.params['CenterToEnd']
-                self.stats['dimensions'] += 1
-                locked += 1
-            except Exception as ex:
-                self._warn('Centre line end-point dimension skipped: {0}'.format(ex))
-        self.stats['centerline_lock'] = '{0}/2 end points driven by CenterToEnd'.format(locked)
-
-    # ----------------------------------------------------------------- 4. flexing
-    def _flex(self):
-        P = self.params
-        rows = []
-        all_ok = True
-        for (w, h) in STANDARD_SIZES + EXTRA_SIZES:
-            exp = expected_values(self.kind, w, h, self.STUB)
-            self.fm.Set(P['Width'], mm(w))
-            self.fm.Set(P['Height'], mm(h))
-            error = None
-            try:
-                self.doc.Regenerate()
-            except Exception as ex:
-                error = str(ex)
-
-            checks = []
-            size_a = size_b = size_h = float('nan')
-            try:
-                bb = self.body.get_BoundingBox(None)
-                size_a = to_mm(bb.Max.X - bb.Min.X)
-                size_b = to_mm(bb.Max.Y - bb.Min.Y)
-                size_h = to_mm(bb.Max.Z - bb.Min.Z)
-                checks.append(abs(size_a - exp['A']) < TOL_MM)
-                checks.append(abs(size_b - exp['B']) < TOL_MM)
-                checks.append(abs(size_h - h) < TOL_MM)
-                checks.append(abs(to_mm(bb.Min.X) + w / 2.0) < TOL_MM)       # outer corner at (-W/2, -W/2)
-                checks.append(abs(to_mm(bb.Min.Y) + w / 2.0) < TOL_MM)
-                checks.append(abs(to_mm(bb.Max.X) - exp['CenterToEnd']) < TOL_MM)
-                checks.append(abs(to_mm(bb.Max.Y) - exp['CenterToEnd']) < TOL_MM)
-            except Exception as ex:
-                checks.append(False)
-                error = error or str(ex)
-
-            current = self.fm.CurrentType
-            t_act = to_mm(current.AsDouble(P['WallThickness']))
-            c_act = to_mm(current.AsDouble(P['C_Length']))
-            cte_act = to_mm(current.AsDouble(P['CenterToEnd']))
-            checks.append(abs(t_act - exp['T']) < 0.01)
-            checks.append(abs(c_act - exp['C']) < 0.01)
-            checks.append(abs(cte_act - exp['CenterToEnd']) < 0.01)
-
-            conn_txt = []
-            for port, conn in ((1, self.conn1), (2, self.conn2)):
-                try:
-                    origin = conn.Origin
-                    expected = pt(exp['CenterToEnd'], 0.0) if port == 1 else pt(0.0, exp['CenterToEnd'])
-                    ok_c = origin.DistanceTo(expected) < mm(TOL_MM)
-                    checks.append(ok_c)
-                    conn_txt.append(fmt_xyz(origin) + ('' if ok_c else ' !!'))
-                except Exception as ex:
-                    checks.append(False)
-                    conn_txt.append('n/a ({0})'.format(ex))
-
-            types = self.fm.Types.Size
-            checks.append(types == 1)
-            ok = (error is None) and all(checks)
-            all_ok = all_ok and ok
-            rows.append([
-                '{0} x {1}'.format(w, h),
-                '{0:.0f} / {1:.2f}'.format(exp['A'], size_a),
-                '{0:.0f} / {1:.2f}'.format(exp['B'], size_b),
-                '{0:.0f} / {1:.2f}'.format(h, size_h),
-                '{0:.2f} / {1:.2f}'.format(exp['C'], c_act),
-                '{0:.1f} / {1:.2f}'.format(exp['T'], t_act),
-                '{0:.1f} / {1:.2f}'.format(exp['CenterToEnd'], cte_act),
-                conn_txt[0] if conn_txt else '',
-                conn_txt[1] if len(conn_txt) > 1 else '',
-                str(types),
-                'PASS' if ok else 'FAIL' + (' (' + error + ')' if error else ''),
-            ])
-
-        # reset the single type back to 100 x 100 before saving
-        self.fm.Set(P['Width'], mm(DEFAULT_W))
-        self.fm.Set(P['Height'], mm(DEFAULT_H))
-        self.doc.Regenerate()
-        assert_single_type(self.fm, 'after flexing')
-        self.flex_rows = rows
-        self.flex_all_ok = all_ok
-
-    # ----------------------------------------------------------------- 5. save
-    def _save(self):
-        path = os.path.join(self.out_dir, self.spec['file'] + '.rfa')
-        opts = SaveAsOptions()
-        opts.OverwriteExistingFile = True
-        opts.Compact = True
-        opts.MaximumBackups = 1
-        self.doc.SaveAs(path, opts)
-        self.saved_path = path
-        logger.info('Saved: ' + path)
-
-
-# =====================================================================================
-#  TEMPLATE / FOLDER SELECTION
-# =====================================================================================
-def find_template(app):
-    roots = []
+def _clr_type(cls):
     try:
-        if app.FamilyTemplatePath and os.path.isdir(app.FamilyTemplatePath):
-            roots.append(app.FamilyTemplatePath)
+        return clr.GetClrType(cls)
+    except Exception:
+        return cls
+
+
+def log(msg):
+    try:
+        print(msg)
     except Exception:
         pass
-    if os.path.isdir(TEMPLATE_ROOT):
-        roots.append(TEMPLATE_ROOT)
-
-    candidates = []
-    for root in roots:
-        for folder, _dirs, files in os.walk(root):
-            for file_name in files:
-                if not file_name.lower().endswith('.rft'):
-                    continue
-                stem = os.path.splitext(file_name)[0]
-                stem_lower = stem.lower()
-                for rank, keyword in enumerate(TEMPLATE_KEYWORDS):
-                    if keyword.lower() in stem_lower:
-                        penalty = 100 if 'imperial' in stem_lower else 0
-                        candidates.append((rank + penalty, os.path.join(folder, file_name)))
-                        break
-    if candidates:
-        candidates.sort(key=lambda c: c[0])
-        return candidates[0][1]
-
-    override = os.environ.get('TRUNKING_TEMPLATE')
-    if override and os.path.isfile(override):
-        return override
-    _alert(u'找不到公制電纜橋架管件樣板（Metric Cable Tray Fitting.rft）。\n'
-           u'CPython 引擎不支援檔案選擇對話框，請把 TRUNKING_TEMPLATE 設成 .rft 的完整路徑，'
-           u'例如 C:\\ProgramData\\Autodesk\\RVT 2027\\Family Templates\\Traditional Chinese\\'
-           u'Metric Cable Tray Fitting.rft', title='Family template')
-    raise Exception('family template not found: set TRUNKING_TEMPLATE')
 
 
-def load_into_project(project_doc, path):
-    """Load a saved .rfa into the active project (overwrite existing family)."""
-    name = os.path.splitext(os.path.basename(path))[0]
-    t = Transaction(project_doc, 'Load family ' + name)
+# ----------------------------------------------------------------------------------------
+# 1. TRANSACTION HELPER (failure swallowing, rollback on errors, no modal dialogs)
+# ----------------------------------------------------------------------------------------
+try:
+    class _FailureSwallower(IFailuresPreprocessor):
+        def PreprocessFailures(self, accessor):
+            has_error = False
+            try:
+                for msg in accessor.GetFailureMessages():
+                    if msg.GetSeverity() == FailureSeverity.Warning:
+                        accessor.DeleteWarning(msg)
+                    else:
+                        has_error = True
+                        LAST_FAILURES.append(str(msg.GetDescriptionText()))
+            except Exception as ex:
+                LAST_FAILURES.append("failure-preprocessor: {}".format(ex))
+            if has_error:
+                return FailureProcessingResult.ProceedWithRollBack
+            return FailureProcessingResult.Continue
+    FAILURE_PREPROCESSOR = _FailureSwallower
+except Exception:
+    FAILURE_PREPROCESSOR = None
+
+
+def run_tx(doc, name, func):
+    """Run func() inside one Transaction. Raises RuntimeError when Revit rolls the transaction back."""
+    t = Transaction(doc, name)
     t.Start()
     try:
-        loaded = False
-        family = None
-        try:
-            family_ref = clr.Reference[Family]()
-            loaded = project_doc.LoadFamily(path, OverwriteFamilyLoadOptions(), family_ref)
-            family = family_ref.Value
-        except Exception:
-            loaded = project_doc.LoadFamily(path)
-        if family is None:
-            for fam in FilteredElementCollector(project_doc).OfClass(Family):
-                if fam.Name == name:
-                    family = fam
-                    break
-        t.Commit()
-        symbol_count = 0
-        if family is not None:
-            family = project_doc.GetElement(eid(family.Id.Value))      # round trip through ElementId(Int64)
-            symbol_count = len(list(family.GetFamilySymbolIds()))
-        return loaded, family, symbol_count
+        if FAILURE_PREPROCESSOR is not None:
+            fho = t.GetFailureHandlingOptions()
+            fho.SetFailuresPreprocessor(FAILURE_PREPROCESSOR())
+            fho.SetClearAfterRollback(True)
+            t.SetFailureHandlingOptions(fho)
+        del LAST_FAILURES[:]
+        result = func()
+        status = t.Commit()
+        if status != TransactionStatus.Committed:
+            raise RuntimeError("Transaction '{}' was not committed ({}): {}".format(
+                name, status, "; ".join(LAST_FAILURES)))
+        return result
     except Exception:
-        if t.HasStarted() and not t.HasEnded():
-            t.RollBack()
+        try:
+            if t.GetStatus() == TransactionStatus.Started:
+                t.RollBack()
+        except Exception:
+            pass
         raise
 
 
-# =====================================================================================
-#  MAIN
-# =====================================================================================
-def main():
-    uiapp = __revit__
-    app = uiapp.Application
+# ----------------------------------------------------------------------------------------
+# 2. FAMILY CONTEXT
+# ----------------------------------------------------------------------------------------
+class PlaneInfo(object):
+    def __init__(self, key, axis, value_mm, rp, normal):
+        self.key = key
+        self.axis = axis
+        self.mm = float(value_mm)
+        self.ft = mm(value_mm)
+        self.rp = rp
+        self.ref = _plane_ref(rp)
+        self.normal = normal
 
+
+class Ctx(object):
+    def __init__(self, app, fam_doc, spec):
+        self.app = app
+        self.doc = fam_doc
+        self.spec = spec
+        self.mitre = spec["mitre"]
+        self.mgr = fam_doc.FamilyManager
+        self.fc = fam_doc.FamilyCreate
+        self.p = {}               # name -> FamilyParameter
+        self.mat = {}             # name -> ElementId
+        self.pl = {}              # key  -> PlaneInfo
+        self.warnings = []
+        self.solid_ids = []       # solid extrusion ids (bounding-box test)
+        self.c_curve_id = None    # sketch line that represents "C"
+        self.plan = None
+        self.front = None
+        self.side = None
+        self.front_y = 0.0
+        self.sk_z0 = None
+        self.part_type_used = ""
+        self.connector_info = ""
+
+    def warn(self, msg):
+        self.warnings.append(msg)
+        log("   [warn] " + msg)
+
+    def cur_ft(self, fp):
+        return self.mgr.CurrentType.AsDouble(fp)
+
+    def val_mm(self, name):
+        return to_mm(self.cur_ft(self.p[name]))
+
+
+def _plane_ref(rp):
+    try:
+        return rp.GetReference()
+    except Exception:
+        return rp.Reference
+
+
+def _rp_plane(rp):
+    """(normal, origin) of a ReferencePlane."""
+    try:
+        pl = rp.GetPlane()
+        return pl.Normal, pl.Origin
+    except Exception:
+        return rp.Normal, rp.BubbleEnd
+
+
+# ----------------------------------------------------------------------------------------
+# 3. TEMPLATE LOOKUP
+# ----------------------------------------------------------------------------------------
+def find_template(app):
+    roots = [TEMPLATE_ROOT]
+    try:
+        p = app.FamilyTemplatePath
+        if p and p not in roots:
+            roots.append(p)
+    except Exception:
+        pass
+    zh_key = [u"电缆桥架", u"電纜橋架", u"桥架", u"橋架", u"电缆梯架", u"線槽", u"线槽"]
+    zh_fit = [u"配件", u"管件", u"连接件", u"連接件"]
+    hits = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dp, dn, fn in os.walk(root):
+            for f in fn:
+                if not f.lower().endswith(".rft"):
+                    continue
+                lf = f.lower()
+                en = ("cable tray" in lf) and ("fitting" in lf)
+                zh = any(k in f for k in zh_key) and any(k in f for k in zh_fit)
+                if en or zh:
+                    score = 0
+                    if "metric" in lf or u"公制" in f:
+                        score -= 2
+                    if "english" in dp.lower():
+                        score -= 1
+                    hits.append((score, os.path.join(dp, f)))
+    if hits:
+        hits.sort(key=lambda x: (x[0], len(x[1])))
+        return hits[0][1]
+    override = os.environ.get("TRUNKING_TEMPLATE")
+    if override and os.path.isfile(override):
+        return override
+    raise RuntimeError(u"no cable tray fitting template (.rft) found; set TRUNKING_TEMPLATE to the full path, "
+                       u"e.g. C:\\ProgramData\\Autodesk\\RVT 2027\\Family Templates\\Traditional Chinese\\"
+                       u"Metric Cable Tray Fitting.rft")
+
+
+# ----------------------------------------------------------------------------------------
+# 4. PARAMETERS (everything is an INSTANCE parameter; exactly one type 'Standard')
+# ----------------------------------------------------------------------------------------
+INPUT_LENGTHS = [
+    ("Width", DEFAULT_W), ("Height", DEFAULT_H), ("Stub", STUB_MM), ("Flange_Length", FLANGE_MM),
+    ("Hole_Diameter", HOLE_D_MM), ("Screw_Head_Diameter", SCREW_D_MM), ("Screw_Head_Height", SCREW_H_MM),
+    ("Screw_End_Offset", SCREW_END_MM), ("Screw_Side_Offset", SCREW_SIDE_MM),
+]
+
+DERIVED_LENGTHS = [
+    ("CenterToEnd", "Width / 2 + Stub"),
+    ("WallThickness", WALL_FORMULA),
+    ("Half_Width", "Width / 2"),
+    ("Half_Height", "Height / 2"),
+    ("Neg_Half_Height", "-Height / 2"),
+    ("Floor_Top_Z", "-Height / 2 + WallThickness"),
+    ("Wall_Top_Z", "Height / 2 - WallThickness"),
+    ("Neg_WallThickness", "-WallThickness"),
+    ("Mitre_Wall_Offset", "WallThickness * 1.4142135624"),
+    ("Hole_Radius", "Hole_Diameter / 2"),
+    ("Hole_Axial_Offset", "Flange_Length / 2"),
+    ("Hole_Z_Offset", "Height / 4"),
+    ("Screw_Head_Radius", "Screw_Head_Diameter / 2"),
+    ("Screw_Top_Z", "Height / 2 + Screw_Head_Height"),
+]
+
+
+def add_param(ctx, name, group, spec_type, is_instance=True):
+    fp = ctx.mgr.get_Parameter(name)
+    if fp is None:
+        fp = ctx.mgr.AddParameter(name, group, spec_type, is_instance)
+    elif bool(fp.IsInstance) != bool(is_instance):
+        try:
+            if is_instance:
+                ctx.mgr.MakeInstance(fp)
+            else:
+                ctx.mgr.MakeType(fp)
+        except Exception as ex:
+            ctx.warn("parameter '{}' already exists as {} ({})".format(
+                name, "instance" if fp.IsInstance else "type", ex))
+    ctx.p[name] = fp
+    return fp
+
+
+def set_formula(ctx, name, formula):
+    try:
+        ctx.mgr.SetFormula(ctx.p[name], formula)
+    except Exception:
+        # locales with a decimal comma
+        ctx.mgr.SetFormula(ctx.p[name], formula.replace(".", ","))
+
+
+def ensure_single_type(ctx):
+    """A new family from a template normally has no type. Exactly ONE type 'Standard' is created / kept.
+    (NewType is only used for this single mandatory type - never for sizes.)"""
+    mgr = ctx.mgr
+    if mgr.Types.Size == 0:
+        mgr.NewType("Standard")
+    else:
+        types = [t for t in mgr.Types]
+        keep = types[0]
+        for t in types[1:]:
+            mgr.CurrentType = t
+            mgr.DeleteCurrentType()
+        mgr.CurrentType = keep
+        if keep.Name != "Standard":
+            mgr.RenameCurrentType("Standard")
+    if mgr.CurrentType is None:
+        raise RuntimeError("Family has no current type")
+
+
+def get_or_create_material(doc, keywords, name, rgb):
+    for m in FilteredElementCollector(doc).OfClass(_clr_type(Material)):
+        nm = (m.Name or "").lower()
+        if any(k in nm for k in keywords):
+            return m.Id
+    mid = Material.Create(doc, name)
+    try:
+        mat = doc.GetElement(mid)
+        mat.Color = Color(rgb[0], rgb[1], rgb[2])
+        mat.Shininess = 70
+        mat.Smoothness = 60
+    except Exception:
+        pass
+    return mid
+
+
+def step_category_part_type_params(ctx):
+    doc = ctx.doc
+    fam = doc.OwnerFamily
+    # --- category -------------------------------------------------------------------
+    cat = Category.GetCategory(doc, BuiltInCategory.OST_CableTrayFitting)
+    cur = fam.FamilyCategory
+    if cur is None or cur.Id.Value != cat.Id.Value:
+        fam.FamilyCategory = cat
+    # --- part type: horizontal bend ------------------------------------------------
+    prm = fam.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+    if prm is None:
+        raise RuntimeError("FAMILY_CONTENT_PART_TYPE not found - is the template a cable tray fitting template?")
+    for nm in PART_TYPE_CANDIDATES:
+        pt = getattr(PartType, nm, None)
+        if pt is None:
+            continue
+        try:
+            if prm.Set(int(pt)) and prm.AsInteger() == int(pt):
+                ctx.part_type_used = "{} ({})".format(nm, int(pt))
+                break
+        except Exception:
+            continue
+    if not ctx.part_type_used:
+        # FAMILY_CONTENT_PART_TYPE is read-only in some 2027 fitting templates;
+        # the Family property is the route that works there
+        for nm in PART_TYPE_CANDIDATES:
+            pt = getattr(PartType, nm, None)
+            if pt is None:
+                continue
+            try:
+                fam.FamilyContentPartType = pt
+                check = fam.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+                if check is not None and check.AsInteger() == int(pt):
+                    ctx.part_type_used = "{} ({}) via property".format(nm, int(pt))
+                    break
+            except Exception:
+                continue
+    if not ctx.part_type_used:
+        ctx.warn("could not set a valid Part Type")
+
+    # --- the single type -------------------------------------------------------------
+    ensure_single_type(ctx)
+
+    geo = GroupTypeId.Geometry
+    # --- inputs (instance) ------------------------------------------------------------
+    for name, val in INPUT_LENGTHS:
+        add_param(ctx, name, geo, SpecTypeId.Length, True)
+        ctx.mgr.Set(ctx.p[name], mm(val))
+    add_param(ctx, "Angle", geo, SpecTypeId.Angle, True)
+    ctx.mgr.Set(ctx.p["Angle"], math.radians(90.0))
+    # --- derived (instance, formula) --------------------------------------------------
+    for name, _f in DERIVED_LENGTHS:
+        add_param(ctx, name, geo, SpecTypeId.Length, True)
+    # --- visibility switches ------------------------------------------------------------
+    for name in ("Show_Cover", "Show_Flanges", "Show_Fasteners"):
+        add_param(ctx, name, GroupTypeId.Visibility, SpecTypeId.Boolean.YesNo, True)
+        ctx.mgr.Set(ctx.p[name], 1)
+    add_param(ctx, "Show_Cover_Screws", GroupTypeId.Visibility, SpecTypeId.Boolean.YesNo, True)
+    # --- identity ---------------------------------------------------------------------------
+    add_param(ctx, "Cover_Type", GroupTypeId.IdentityData, SpecTypeId.String.Text, True)
+    ctx.mgr.Set(ctx.p["Cover_Type"], "QT")   # QT centre caption / ST screw fix / CT clip fix
+    # --- materials --------------------------------------------------------------------------
+    ctx.mat["Body_Material"] = get_or_create_material(doc, ["galvaniz"], "Galvanized Steel", (186, 192, 198))
+    ctx.mat["Cover_Material"] = ctx.mat["Body_Material"]
+    ctx.mat["Screw_Material"] = get_or_create_material(doc, ["stainless"], "Stainless Steel", (150, 154, 160))
+    for name in ("Body_Material", "Cover_Material", "Screw_Material"):
+        add_param(ctx, name, GroupTypeId.Materials, SpecTypeId.Reference.Material, True)
+        ctx.mgr.Set(ctx.p[name], ctx.mat[name])
+    # --- formulas -------------------------------------------------------------------------------
+    for name, formula in DERIVED_LENGTHS:
+        set_formula(ctx, name, formula)
+    ctx.mgr.SetFormula(ctx.p["Show_Cover_Screws"], "and(Show_Cover, Show_Fasteners)")
+
+
+# ----------------------------------------------------------------------------------------
+# 5. VIEWS, REFERENCE PLANES, LABELLED DIMENSIONS
+# ----------------------------------------------------------------------------------------
+AXIS_VEC = {"X": XYZ(1, 0, 0), "Y": XYZ(0, 1, 0), "Z": XYZ(0, 0, 1)}
+
+
+def step_find_views(ctx):
+    plan = front = side = None
+    for v in FilteredElementCollector(ctx.doc).OfClass(_clr_type(View)):
+        try:
+            if v.IsTemplate:
+                continue
+            vt = v.ViewType
+            if vt == ViewType.FloorPlan:
+                if plan is None or "ref" in v.Name.lower():
+                    plan = v
+            elif vt == ViewType.Elevation:
+                d = v.ViewDirection
+                if abs(abs(d.Y) - 1.0) < 1e-6:
+                    if front is None or v.Name.lower() == "front":
+                        front = v
+                elif abs(abs(d.X) - 1.0) < 1e-6:
+                    if side is None or v.Name.lower() in ("left", "right"):
+                        side = v
+        except Exception:
+            continue
+    if plan is None or front is None or side is None:
+        raise RuntimeError("Template lacks a floor plan and front / side elevations (plan={}, front={}, side={})".format(
+            plan is not None, front is not None, side is not None))
+    ctx.plan, ctx.front, ctx.side = plan, front, side
+    ctx.front_y = front.Origin.Y
+    ctx.sk_z0 = SketchPlane.Create(ctx.doc, Plane.CreateByNormalAndOrigin(XYZ(0, 0, 1), XYZ(0, 0, 0)))
+
+
+def _make_plane(ctx, key, axis, value_mm):
+    v = mm(value_mm)
+    L = mm(PLANE_EXTENT_MM)
+    if axis == "X":
+        view, b0, f0, cut = ctx.plan, XYZ(v, -L, 0), XYZ(v, L, 0), XYZ(0, 0, 1)
+    elif axis == "Y":
+        view, b0, f0, cut = ctx.plan, XYZ(-L, v, 0), XYZ(L, v, 0), XYZ(0, 0, 1)
+    else:
+        y0 = ctx.front_y
+        view, b0, f0, cut = ctx.front, XYZ(-L, y0, v), XYZ(L, y0, v), XYZ(0, 1, 0)
+    want = AXIS_VEC[axis]
+    tries = [(b0, f0, cut), (f0, b0, cut), (b0, f0, cut.Negate()), (f0, b0, cut.Negate())]
+    chosen = None
+    chosen_n = None
+    for (b, f, c) in tries:
+        rp = ctx.fc.NewReferencePlane(b, f, c, view)
+        n, _o = _rp_plane(rp)
+        if n is None or n.DotProduct(want) > 0.99:
+            chosen, chosen_n = rp, n
+            break
+        ctx.doc.Delete(rp.Id)
+    if chosen is None:   # keep a plane with the "wrong" sign rather than failing
+        chosen = ctx.fc.NewReferencePlane(b0, f0, cut, view)
+        chosen_n, _o = _rp_plane(chosen)
+        ctx.warn("plane '{}' normal could not be oriented to +{}".format(key, axis))
+    chosen.Name = "TRK_" + key
+    info = PlaneInfo(key, axis, value_mm, chosen, chosen_n)
+    ctx.pl[key] = info
+    return info
+
+
+def plane_defs(mitre, w=DEFAULT_W, h=DEFAULT_H):
+    """(key, axis, value_mm) of every parametric reference plane at the default size."""
+    t = wall_thickness_mm(w, h)
+    hw = w / 2.0
+    ce = hw + STUB_MM
+    out = []
+    for ax in ("X", "Y"):
+        out += [
+            (ax + "_out", ax, -hw), (ax + "_out_T", ax, -hw + t),
+            (ax + "_in_T", ax, hw - t), (ax + "_in", ax, hw),
+            (ax + "_end", ax, ce), (ax + "_fl_end", ax, ce + FLANGE_MM),
+            (ax + "_hole", ax, ce + FLANGE_MM / 2.0),
+            (ax + "_scr_end", ax, ce - SCREW_END_MM),
+            (ax + "_scr_pos", ax, hw - SCREW_SIDE_MM),
+            (ax + "_scr_neg", ax, -(hw - SCREW_SIDE_MM)),
+        ]
+        if mitre:
+            out.append((ax + "_in_D", ax, hw - t * SQRT2))
+    out += [("Z_top", "Z", h / 2.0), ("Z_bot", "Z", -h / 2.0), ("Z_wall_top", "Z", h / 2.0 - t),
+            ("Z_hole_up", "Z", h / 4.0), ("Z_hole_dn", "Z", -h / 4.0)]
+    return out
+
+
+def dim_defs(mitre):
+    """(plane A, plane B, parameter) - exactly one driving dimension per movable plane."""
+    out = []
+    for ax in ("X", "Y"):
+        out += [
+            (ax + "_C", ax + "_in", "Half_Width"),
+            (ax + "_C", ax + "_out", "Half_Width"),
+            (ax + "_out", ax + "_out_T", "WallThickness"),
+            (ax + "_in_T", ax + "_in", "WallThickness"),
+            (ax + "_C", ax + "_end", "CenterToEnd"),
+            (ax + "_end", ax + "_fl_end", "Flange_Length"),
+            (ax + "_end", ax + "_hole", "Hole_Axial_Offset"),
+            (ax + "_scr_end", ax + "_end", "Screw_End_Offset"),
+            (ax + "_scr_pos", ax + "_in", "Screw_Side_Offset"),
+            (ax + "_out", ax + "_scr_neg", "Screw_Side_Offset"),
+        ]
+        if mitre:
+            out.append((ax + "_in_D", ax + "_in", "Mitre_Wall_Offset"))
+    out += [("Z_C", "Z_top", "Half_Height"), ("Z_C", "Z_bot", "Half_Height"),
+            ("Z_top", "Z_wall_top", "WallThickness"),
+            ("Z_C", "Z_hole_up", "Hole_Z_Offset"), ("Z_C", "Z_hole_dn", "Hole_Z_Offset")]
+    return out
+
+
+def _register_centre_planes(ctx):
+    found = {}
+    for rp in FilteredElementCollector(ctx.doc).OfClass(_clr_type(ReferencePlane)):
+        try:
+            n, o = _rp_plane(rp)
+            if abs(n.X) > 0.99 and abs(o.X) < 1e-6 and "X" not in found:
+                found["X"] = (rp, n)
+            elif abs(n.Y) > 0.99 and abs(o.Y) < 1e-6 and "Y" not in found:
+                found["Y"] = (rp, n)
+            elif abs(n.Z) > 0.99 and abs(o.Z) < 1e-6 and "Z" not in found:
+                found["Z"] = (rp, n)
+        except Exception:
+            continue
+    for ax in ("X", "Y", "Z"):
+        if ax in found:
+            rp, n = found[ax]
+            ctx.pl[ax + "_C"] = PlaneInfo(ax + "_C", ax, 0.0, rp, n)
+        else:
+            _make_plane(ctx, ax + "_C", ax, 0.0)
+        try:
+            ctx.pl[ax + "_C"].rp.Pinned = True      # the origin planes must never move
+        except Exception:
+            pass
+
+
+def label_dimension(ctx, ka, kb, pname, lane):
+    a, b = ctx.pl[ka], ctx.pl[kb]
+    off = mm(-(DIM_BASE_MM + DIM_STEP_MM * lane))
+    if a.axis == "X":
+        view, p0, p1 = ctx.plan, XYZ(a.ft, off, 0), XYZ(b.ft, off, 0)
+    elif a.axis == "Y":
+        view, p0, p1 = ctx.plan, XYZ(off, a.ft, 0), XYZ(off, b.ft, 0)
+    else:
+        view, p0, p1 = ctx.front, XYZ(off, ctx.front_y, a.ft), XYZ(off, ctx.front_y, b.ft)
+    refs = ReferenceArray()
+    refs.Append(a.ref)
+    refs.Append(b.ref)
+    dim = ctx.fc.NewDimension(view, Line.CreateBound(p0, p1), refs)
+    dim.FamilyLabel = ctx.p[pname]
+    return dim
+
+
+def step_planes_and_dimensions(ctx):
+    step_find_views(ctx)
+    _register_centre_planes(ctx)
+    for key, axis, val in plane_defs(ctx.mitre):
+        _make_plane(ctx, key, axis, val)
+    ctx.doc.Regenerate()
+    lanes = {"X": 0, "Y": 0, "Z": 0}
+    for ka, kb, pname in dim_defs(ctx.mitre):
+        ax = ctx.pl[ka].axis
+        try:
+            label_dimension(ctx, ka, kb, pname, lanes[ax])
+            lanes[ax] += 1
+        except Exception as ex:
+            ctx.warn("dimension {} -> {} ({}) failed: {}".format(ka, kb, pname, ex))
+    ctx.doc.Regenerate()
+
+
+# ----------------------------------------------------------------------------------------
+# 6. SKETCH CONSTRAINT ENGINE  (profile lines / end points / circle centres locked to planes)
+# ----------------------------------------------------------------------------------------
+def _align(ctx, view, plane_ref, other_ref, what):
+    if plane_ref is None or other_ref is None:
+        ctx.warn("alignment skipped (null reference): " + what)
+        return False
+    try:
+        ctx.fc.NewAlignment(view, plane_ref, other_ref)
+        return True
+    except Exception as ex:
+        ctx.warn("alignment failed: {} ({})".format(what, str(ex).split("\n")[0]))
+        return False
+
+
+def _fresh(ctx, mc):
+    return ctx.doc.GetElement(mc.Id)
+
+
+def _sketch_curves(ctx, ext):
+    out = []
+    try:
+        for eid in ext.Sketch.GetAllElements():
+            e = ctx.doc.GetElement(eid)
+            if e is not None and hasattr(e, "GeometryCurve"):
+                out.append(e)
+    except Exception as ex:
+        ctx.warn("cannot read sketch of extrusion: {}".format(ex))
+    return out
+
+
+def _find_line(mcs, a, b):
+    for mc in mcs:
+        c = mc.GeometryCurve
+        if not isinstance(c, Line):
+            continue
+        p0, p1 = c.GetEndPoint(0), c.GetEndPoint(1)
+        if (p0.DistanceTo(a) < TOL_FT and p1.DistanceTo(b) < TOL_FT) or \
+           (p0.DistanceTo(b) < TOL_FT and p1.DistanceTo(a) < TOL_FT):
+            return mc
+    return None
+
+
+def constrain_polyline(ctx, view, keys, pts, mcs, closed, tag):
+    """keys = [(u_plane_key, v_plane_key)], pts = [XYZ].  Every axis-parallel edge is aligned to its plane; every
+    vertex coordinate that is still free (diagonal edges) is locked by aligning the end point to its plane."""
+    n = len(keys)
+    m = n if closed else n - 1
+    edge_mc = {}
+    fixed = [[False, False] for _ in range(n)]
+    for k in range(m):
+        i0, i1 = k, (k + 1) % n
+        mc = _find_line(mcs, pts[i0], pts[i1])
+        edge_mc[k] = mc
+        if mc is None:
+            ctx.warn("{}: sketch line {} not found".format(tag, k))
+            continue
+        (ua, va), (ub, vb) = keys[i0], keys[i1]
+        ref = _fresh(ctx, mc).GeometryCurve.Reference
+        if ua == ub:
+            if _align(ctx, view, ctx.pl[ua].ref, ref, "{} edge {} -> {}".format(tag, k, ua)):
+                fixed[i0][0] = fixed[i1][0] = True
+        elif va == vb:
+            if _align(ctx, view, ctx.pl[va].ref, ref, "{} edge {} -> {}".format(tag, k, va)):
+                fixed[i0][1] = fixed[i1][1] = True
+    for i in range(n):
+        for axis in (0, 1):
+            if fixed[i][axis]:
+                continue
+            cand = []
+            if i < m:
+                cand.append(i)
+            if closed or i - 1 >= 0:
+                cand.append((i - 1) % n)
+            done = False
+            for k in cand:
+                mc = edge_mc.get(k)
+                if mc is None:
+                    continue
+                c = _fresh(ctx, mc).GeometryCurve
+                idx = 0 if c.GetEndPoint(0).DistanceTo(pts[i]) < TOL_FT else 1
+                done = _align(ctx, view, ctx.pl[keys[i][axis]].ref, c.GetEndPointReference(idx),
+                              "{} vertex {} end point -> {}".format(tag, i, keys[i][axis]))
+                if done:
+                    break
+    return edge_mc
+
+
+def _circle_curves(normal, center, radius):
+    pl = Plane.CreateByNormalAndOrigin(normal, center)
+    try:
+        return [Arc.Create(pl, radius, 0.0, 2.0 * math.pi)]
+    except Exception:
+        # two half arcs fallback
+        xa = pl.XVec
+        ya = pl.YVec
+        p0 = center + xa.Multiply(radius)
+        p1 = center - xa.Multiply(radius)
+        return [Arc.Create(p0, p1, center + ya.Multiply(radius)),
+                Arc.Create(p1, p0, center - ya.Multiply(radius))]
+
+
+def _center_reference(ctx, mc):
+    ref = None
+    try:
+        ref = _fresh(ctx, mc).CenterPointReference
+    except Exception:
+        ref = None
+    if ref is not None:
+        return ref
+    try:   # make the centre mark visible, then ask again
+        for prm in _fresh(ctx, mc).Parameters:
+            try:
+                s = str(prm.Definition.BuiltInParameter).upper()
+                if "CENTER" in s and "MARK" in s and not prm.IsReadOnly:
+                    prm.Set(1)
+            except Exception:
+                continue
+        ctx.doc.Regenerate()
+        return _fresh(ctx, mc).CenterPointReference
+    except Exception:
+        return None
+
+
+def constrain_circle(ctx, view, mcs, center, radius, ukey, vkey, rparam, tag):
+    mc = None
+    for m in mcs:
+        c = m.GeometryCurve
+        if isinstance(c, Arc) and c.Center.DistanceTo(center) < TOL_FT and abs(c.Radius - radius) < TOL_FT:
+            mc = m
+            break
+    if mc is None:
+        ctx.warn("{}: circle not found in sketch".format(tag))
+        return
+    cref = _center_reference(ctx, mc)
+    if cref is None:
+        ctx.warn("{}: circle centre reference unavailable".format(tag))
+    else:
+        _align(ctx, view, ctx.pl[ukey].ref, cref, "{} centre -> {}".format(tag, ukey))
+        _align(ctx, view, ctx.pl[vkey].ref, cref, "{} centre -> {}".format(tag, vkey))
+    if rparam is not None:
+        try:
+            c = _fresh(ctx, mc).GeometryCurve
+            dim = ctx.fc.NewRadialDimension(view, c.Reference, c.Center)
+            dim.FamilyLabel = rparam
+        except Exception as ex:
+            ctx.warn("{}: radius dimension failed: {}".format(tag, str(ex).split("\n")[0]))
+
+
+# ----------------------------------------------------------------------------------------
+# 7. EXTRUSION BUILDER
+# ----------------------------------------------------------------------------------------
+def poly(keys, closed=True):
+    return {"type": "poly", "keys": keys, "closed": closed}
+
+
+def free_poly(coords_mm):
+    return {"type": "free", "coords": coords_mm}
+
+
+def circ(ukey, vkey, r_mm, rparam):
+    return {"type": "circle", "u": ukey, "v": vkey, "r": r_mm, "rparam": rparam}
+
+
+def set_visibility(elem, lod, view_specific=False):
+    try:
+        fev = FamilyElementVisibility(FamilyElementVisibilityType.ViewSpecific if view_specific
+                                      else FamilyElementVisibilityType.Model)
+        fev.IsShownInCoarse = lod[0]
+        fev.IsShownInMedium = lod[1]
+        fev.IsShownInFine = lod[2]
+        elem.SetVisibility(fev)
+        return True
+    except Exception:
+        return False
+
+
+def _set_range(ctx, ext, start, end):
+    ps = ext.get_Parameter(BuiltInParameter.EXTRUSION_START_PARAM)
+    pe = ext.get_Parameter(BuiltInParameter.EXTRUSION_END_PARAM)
+
+    def val(x):
+        return ctx.cur_ft(x) if isinstance(x, FamilyParameter) else mm(x)
+    s, e = val(start), val(end)
+    if s < pe.AsDouble() - 1e-9:
+        ps.Set(s)
+        pe.Set(e)
+    else:
+        pe.Set(e)
+        ps.Set(s)
+    for prm, x in ((ps, start), (pe, end)):
+        if isinstance(x, FamilyParameter):
+            ctx.mgr.AssociateElementParameterToFamilyParameter(prm, x)
+
+
+def build_profile(ctx, name, frame, host, loops, rng, material=None, visible=None, lod=None, solid=True):
+    """Create one extrusion.
+       frame : "XY" (sketch on Z=0, view = plan) | "XZ" (hosted on a Y plane, front elevation)
+               | "YZ" (hosted on an X plane, side elevation)
+       rng   : (start, end) - FamilyParameter or mm number, or the string "THICK" (plate of WallThickness
+               extruded along +normal of the hosting plane).
+       returns (extrusion, {(loop, edge): sketch line id})"""
+    doc = ctx.doc
+    if frame == "XY":
+        sp, view, normal = ctx.sk_z0, ctx.plan, XYZ(0, 0, 1)
+        hp = None
+
+        def to3d(u, v):
+            return XYZ(u, v, 0.0)
+    else:
+        hp = ctx.pl[host]
+        sp = None
+        for maker in (lambda: SketchPlane.Create(doc, hp.ref),
+                      lambda: SketchPlane.Create(doc, hp.rp.Id),
+                      lambda: SketchPlane.Create(doc, hp.rp.GetPlane())):
+            try:
+                sp = maker()
+                break
+            except Exception:
+                continue
+        if sp is None:
+            raise RuntimeError("cannot create sketch plane on {}".format(host))
+        if frame == "XZ":
+            view, normal = ctx.front, XYZ(0, 1, 0)
+
+            def to3d(u, v):
+                return XYZ(u, hp.ft, v)
+        else:
+            view, normal = ctx.side, XYZ(1, 0, 0)
+
+            def to3d(u, v):
+                return XYZ(hp.ft, u, v)
+
+    # ---- curves ----------------------------------------------------------------------
+    arr_all = CurveArrArray()
+    meta = []
+    for li, L in enumerate(loops):
+        ca = CurveArray()
+        if L["type"] == "poly":
+            pts = [to3d(ctx.pl[ku].ft, ctx.pl[kv].ft) for (ku, kv) in L["keys"]]
+            n = len(pts)
+            for i in range(n if L["closed"] else n - 1):
+                ca.Append(Line.CreateBound(pts[i], pts[(i + 1) % n]))
+            meta.append(("poly", L, pts))
+        elif L["type"] == "free":
+            pts = [to3d(mm(u), mm(v)) for (u, v) in L["coords"]]
+            for i in range(len(pts)):
+                ca.Append(Line.CreateBound(pts[i], pts[(i + 1) % len(pts)]))
+            meta.append(("free", L, pts))
+        else:
+            c = to3d(ctx.pl[L["u"]].ft, ctx.pl[L["v"]].ft)
+            for crv in _circle_curves(normal, c, mm(L["r"])):
+                ca.Append(crv)
+            meta.append(("circle", L, c))
+        arr_all.Append(ca)
+
+    ext = ctx.fc.NewExtrusion(solid, arr_all, sp, mm(10.0))
+    # ---- extrusion range -------------------------------------------------------------------
+    if rng == "THICK":
+        flip = False
+        try:
+            flip = sp.GetPlane().Normal.DotProduct(AXIS_VEC[hp.axis]) < 0
+        except Exception:
+            pass
+        rng = (ctx.p["Neg_WallThickness"], 0.0) if flip else (0.0, ctx.p["WallThickness"])
+    _set_range(ctx, ext, rng[0], rng[1])
+    try:
+        ext.Name = "TRK_" + name
+    except Exception:
+        pass
+    doc.Regenerate()
+
+    # ---- constraints ------------------------------------------------------------------------
+    mcs = _sketch_curves(ctx, ext)
+    edge_ids = {}
+    for li, (kind, L, data) in enumerate(meta):
+        if kind == "poly":
+            em = constrain_polyline(ctx, view, L["keys"], data, mcs, L["closed"], "{}[{}]".format(name, li))
+            for k, mc in em.items():
+                if mc is not None:
+                    edge_ids[(li, k)] = mc.Id
+        elif kind == "circle":
+            constrain_circle(ctx, view, mcs, data, mm(L["r"]), L["u"], L["v"],
+                             ctx.p[L["rparam"]] if L["rparam"] else None, "{}[{}]".format(name, li))
+    doc.Regenerate()
+
+    # ---- parameters bound to the form ----------------------------------------------------------
+    if solid:
+        if material:
+            prm = ext.get_Parameter(BuiltInParameter.MATERIAL_ID_PARAM)
+            if prm is not None:
+                ctx.mgr.AssociateElementParameterToFamilyParameter(prm, ctx.p[material])
+        if visible:
+            prm = ext.get_Parameter(BuiltInParameter.IS_VISIBLE_PARAM)
+            if prm is not None:
+                ctx.mgr.AssociateElementParameterToFamilyParameter(prm, ctx.p[visible])
+        if lod:
+            if not set_visibility(ext, lod):
+                ctx.warn("{}: detail-level visibility could not be set".format(name))
+        ctx.solid_ids.append(ext.Id)
+    return ext, edge_ids
+
+
+# ----------------------------------------------------------------------------------------
+# 8. THE BEND GEOMETRY
+# ----------------------------------------------------------------------------------------
+def outline_keys(mitre):
+    """XY outline as (u-plane, v-plane) pairs - identical to the Three.js preview."""
+    if mitre:
+        return [("X_out", "Y_out"), ("X_end", "Y_out"), ("X_end", "Y_in"), ("X_in", "Y_end"), ("X_out", "Y_end")]
+    return [("X_out", "Y_out"), ("X_end", "Y_out"), ("X_end", "Y_in"), ("X_in", "Y_in"),
+            ("X_in", "Y_end"), ("X_out", "Y_end")]
+
+
+def step_geometry(ctx):
+    P = ctx.p
+    mitre = ctx.mitre
+    outline = outline_keys(mitre)
+
+    # 1) floor (bottom plate)  z: -H/2 .. -H/2 + T
+    build_profile(ctx, "Floor", "XY", None, [poly(outline)],
+                  (P["Neg_Half_Height"], P["Floor_Top_Z"]), "Body_Material", None, LOD_BODY)
+
+    # 2) outer walls (L shaped, open at both ports)  z: -H/2 + T .. H/2 - T
+    outer = [("X_out", "Y_end"), ("X_out", "Y_out"), ("X_end", "Y_out"), ("X_end", "Y_out_T"),
+             ("X_out_T", "Y_out_T"), ("X_out_T", "Y_end")]
+    build_profile(ctx, "OuterWall", "XY", None, [poly(outer)],
+                  (P["Floor_Top_Z"], P["Wall_Top_Z"]), "Body_Material", None, LOD_BODY)
+
+    # 3) inner walls : mitre = one 45-degree wall (C = 75 * sqrt 2) / sharp = L shaped, two walls of C = 75
+    if mitre:
+        inner = [("X_end", "Y_in"), ("X_in", "Y_end"), ("X_in_D", "Y_end"), ("X_end", "Y_in_D")]
+    else:
+        inner = [("X_end", "Y_in"), ("X_in", "Y_in"), ("X_in", "Y_end"), ("X_in_T", "Y_end"),
+                 ("X_in_T", "Y_in_T"), ("X_end", "Y_in_T")]
+    build_profile(ctx, "InnerWall", "XY", None, [poly(inner)],
+                  (P["Floor_Top_Z"], P["Wall_Top_Z"]), "Body_Material", None, LOD_BODY)
+
+    # 4) cover (front opening, +Z top)  z: H/2 - T .. H/2   - Show_Cover
+    _ext, ids = build_profile(ctx, "Cover", "XY", None, [poly(outline)],
+                              (P["Wall_Top_Z"], P["Half_Height"]), "Cover_Material", "Show_Cover", LOD_BODY)
+    ctx.c_curve_id = ids.get((0, 2))     # edge 3 -> 4 : mitre diagonal / sharp inner straight
+
+    # 5) coupling tabs with through holes (hole = inner loop of the tab sketch) - Show_Flanges
+    for frame, uax, hosts in (("XZ", "X", ("Y_out", "Y_in_T")), ("YZ", "Y", ("X_out", "X_in_T"))):
+        for host in hosts:
+            rect = poly([(uax + "_end", "Z_bot"), (uax + "_fl_end", "Z_bot"),
+                         (uax + "_fl_end", "Z_wall_top"), (uax + "_end", "Z_wall_top")])
+            holes = [circ(uax + "_hole", "Z_hole_up", HOLE_D_MM / 2.0, "Hole_Radius"),
+                     circ(uax + "_hole", "Z_hole_dn", HOLE_D_MM / 2.0, "Hole_Radius")]
+            build_profile(ctx, "Tab_{}_{}".format(uax, host), frame, host, [rect] + holes, "THICK",
+                          "Body_Material", "Show_Flanges", LOD_FINE)
+
+    # 6) cover fixing screws : 2 per port, on the +Z face of the cover - Show_Cover AND Show_Fasteners
+    screws = [circ("X_scr_end", "Y_scr_pos", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
+              circ("X_scr_end", "Y_scr_neg", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
+              circ("X_scr_pos", "Y_scr_end", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
+              circ("X_scr_neg", "Y_scr_end", SCREW_D_MM / 2.0, "Screw_Head_Radius")]
+    build_profile(ctx, "CoverScrews", "XY", None, screws, (P["Half_Height"], P["Screw_Top_Z"]),
+                  "Screw_Material", "Show_Cover_Screws", LOD_FINE)
+
+
+# ----------------------------------------------------------------------------------------
+# 9. CONNECTORS (2 x cable tray connector, outward normals, linked)  +  2D CENTRE LINES
+# ----------------------------------------------------------------------------------------
+def _marker_face_reference(ctx, key):
+    """Fallback: a tiny void (10 x 10 x 1 mm, inside the port, cuts nothing) whose outer face lies exactly in
+    the port plane. Its planar face hosts the connector at the face centroid = port centre."""
+    pl = ctx.pl[key]
+    frame = "YZ" if pl.axis == "X" else "XZ"
+    sq = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+    ext, _ids = build_profile(ctx, "PortMarker_" + key, frame, key, [free_poly(sq)], (-1.0, 0.0),
+                              None, None, None, solid=False)
+    opt = Options()
+    opt.ComputeReferences = True
+    opt.IncludeNonVisibleObjects = True
+    want = AXIS_VEC[pl.axis]
+    for g in ext.get_Geometry(opt):
+        if isinstance(g, Solid):
+            for f in g.Faces:
+                if isinstance(f, PlanarFace) and f.FaceNormal.DotProduct(want) > 0.99:
+                    d = f.Origin.X if pl.axis == "X" else f.Origin.Y
+                    if abs(d - pl.ft) < TOL_FT * 10:
+                        return f.Reference
+    raise RuntimeError("no marker face found for connector host '{}'".format(key))
+
+
+def _create_connector(ctx, key):
+    try:
+        return ConnectorElement.CreateCableTrayConnector(ctx.doc, ctx.pl[key].ref)
+    except Exception as ex:
+        ctx.warn("connector on reference plane '{}' failed ({}); using marker-face fallback".format(
+            key, str(ex).split("\n")[0]))
+    return ConnectorElement.CreateCableTrayConnector(ctx.doc, _marker_face_reference(ctx, key))
+
+
+def _bind(ctx, elem, bip_name, fp):
+    bip = getattr(BuiltInParameter, bip_name, None)
+    if bip is None:
+        return False
+    prm = elem.get_Parameter(bip)
+    if prm is None:
+        return False
+    ctx.mgr.AssociateElementParameterToFamilyParameter(prm, fp)
+    return True
+
+
+def step_connectors_and_centerlines(ctx):
+    P = ctx.p
+    ce = mm(DEFAULT_W / 2.0 + STUB_MM)
+    targets = [("X_end", XYZ(ce, 0, 0)), ("Y_end", XYZ(0, ce, 0))]
+    conns = []
+    for key, target in targets:
+        conn = _create_connector(ctx, key)
+        ctx.doc.Regenerate()
+        try:   # connector must sit on the centre line of the port
+            delta = target - conn.Origin
+            if delta.GetLength() > TOL_FT:
+                ElementTransformUtils.MoveElement(ctx.doc, conn.Id, delta)
+        except Exception as ex:
+            ctx.warn("connector '{}' could not be centred: {}".format(key, str(ex).split("\n")[0]))
+        if not _bind(ctx, conn, "CONNECTOR_WIDTH", P["Width"]):
+            raise RuntimeError("CONNECTOR_WIDTH could not be bound")
+        if not _bind(ctx, conn, "CONNECTOR_HEIGHT", P["Height"]):
+            raise RuntimeError("CONNECTOR_HEIGHT could not be bound")
+        if BIND_CONNECTOR_ANGLE:
+            try:
+                _bind(ctx, conn, "CONNECTOR_ANGLE", P["Angle"])
+            except Exception as ex:
+                ctx.warn("CONNECTOR_ANGLE binding skipped: {}".format(ex))
+        conns.append(conn)
+    conns[0].SetLinkedConnectorElement(conns[1])
+    ctx.connector_info = "2 cable tray connectors (linked)"
+
+    # 2D centre lines : symbolic lines, Coarse only, locked to the centre / port planes
+    for keys in ([("X_C", "Y_C"), ("X_end", "Y_C")], [("X_C", "Y_C"), ("X_C", "Y_end")]):
+        try:
+            pts = [XYZ(ctx.pl[ku].ft, ctx.pl[kv].ft, 0.0) for (ku, kv) in keys]
+            sc = ctx.fc.NewSymbolicCurve(Line.CreateBound(pts[0], pts[1]), ctx.sk_z0)
+            constrain_polyline(ctx, ctx.plan, keys, pts, [sc], False, "CentreLine")
+            if not set_visibility(sc, LOD_CENTER, True):
+                ctx.warn("centre line detail-level visibility could not be set")
+        except Exception as ex:
+            ctx.warn("centre line failed: {}".format(str(ex).split("\n")[0]))
+    ctx.doc.Regenerate()
+
+
+# ----------------------------------------------------------------------------------------
+# 10. FLEXING VALIDATION (single type - only the instance parameters Width / Height are changed)
+# ----------------------------------------------------------------------------------------
+def solid_bbox_mm(ctx):
+    mn = [1.0e12, 1.0e12, 1.0e12]
+    mx = [-1.0e12, -1.0e12, -1.0e12]
+    for eid in ctx.solid_ids:
+        bb = ctx.doc.GetElement(eid).get_BoundingBox(None)
+        if bb is None:
+            continue
+        for i, (a, b) in enumerate(((bb.Min.X, bb.Max.X), (bb.Min.Y, bb.Max.Y), (bb.Min.Z, bb.Max.Z))):
+            mn[i] = min(mn[i], to_mm(a))
+            mx[i] = max(mx[i], to_mm(b))
+    return mn, mx
+
+
+def connector_state(ctx):
+    out = []
+    for c in FilteredElementCollector(ctx.doc).OfClass(_clr_type(ConnectorElement)):
+        o = c.Origin
+        out.append(((to_mm(o.X), to_mm(o.Y), to_mm(o.Z)), to_mm(c.Width), to_mm(c.Height)))
+    return out
+
+
+def flex_to(ctx, w, h):
+    def _do():
+        ctx.mgr.Set(ctx.p["Width"], mm(w))
+        ctx.mgr.Set(ctx.p["Height"], mm(h))
+        ctx.doc.Regenerate()
+    run_tx(ctx.doc, "Flex {}x{}".format(int(w), int(h)), _do)
+
+
+def validate_size(ctx, w, h):
+    """returns (row, ok)"""
+    errs = []
+    try:
+        flex_to(ctx, w, h)
+    except Exception as ex:
+        return ([ctx.spec["label"], "{}x{}".format(int(w), int(h)), "-", "-", "-", "-", "-", "-",
+                 "FAIL regenerate: {}".format(str(ex).split("\n")[0][:90])], False)
+    mn, mx = solid_bbox_mm(ctx)
+    fl = ctx.val_mm("Flange_Length")
+    ce = ctx.val_mm("CenterToEnd")
+    t = ctx.val_mm("WallThickness")
+    a_meas = (mx[0] - fl) - mn[0]
+    b_meas = (mx[1] - fl) - mn[1]
+    c_meas = None
+    try:
+        c_meas = to_mm(ctx.doc.GetElement(ctx.c_curve_id).GeometryCurve.Length)
+    except Exception:
+        errs.append("C curve unreadable")
+    exp_a = w + STUB_MM
+    exp_c = STUB_MM * SQRT2 if ctx.mitre else STUB_MM
+    exp_t = wall_thickness_mm(w, h)
+    exp_min = (-w / 2.0, -w / 2.0, -h / 2.0)
+    exp_max = (w / 2.0 + STUB_MM + FLANGE_MM, w / 2.0 + STUB_MM + FLANGE_MM, h / 2.0 + SCREW_H_MM)
+
+    def chk(label, got, exp, tol=TOL_MM):
+        if got is None or abs(got - exp) > tol:
+            errs.append("{} {} != {}".format(label, "n/a" if got is None else "{:.2f}".format(got),
+                                              "{:.2f}".format(exp)))
+    chk("A", a_meas, exp_a)
+    chk("B", b_meas, exp_a)
+    chk("C", c_meas, exp_c)
+    chk("T", t, exp_t, 0.001)
+    chk("CenterToEnd", ce, w / 2.0 + STUB_MM)
+    for i, ax in enumerate("XYZ"):
+        chk("min" + ax, mn[i], exp_min[i])
+        chk("max" + ax, mx[i], exp_max[i])
+    cs = connector_state(ctx)
+    if len(cs) != 2:
+        errs.append("connector count {}".format(len(cs)))
+    else:
+        want = [(ce, 0.0, 0.0), (0.0, ce, 0.0)]
+        for (o, cw, chh) in cs:
+            hit = False
+            for wv in want:
+                if abs(o[0] - wv[0]) < TOL_MM and abs(o[1] - wv[1]) < TOL_MM and abs(o[2] - wv[2]) < TOL_MM:
+                    hit = True
+            if not hit:
+                errs.append("connector origin {:.1f},{:.1f},{:.1f}".format(o[0], o[1], o[2]))
+            chk("conn W", cw, w)
+            chk("conn H", chh, h)
+    row = [ctx.spec["label"], "{}x{}".format(int(w), int(h)),
+           "{:.1f}".format(a_meas), "{:.1f}".format(b_meas),
+           "{:.1f}".format(c_meas) if c_meas is not None else "n/a",
+           "{:.1f}".format(t),
+           "{:.0f} x {:.0f} x {:.0f}".format(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]),
+           "{:.0f}/{:.0f}".format(ce, ce),
+           "PASS" if not errs else "FAIL " + "; ".join(errs[:3])]
+    return row, not errs
+
+
+# ----------------------------------------------------------------------------------------
+# 11. ONE FAMILY
+# ----------------------------------------------------------------------------------------
+def build_family(app, template, spec, folder):
+    fam_doc = app.NewFamilyDocument(template)
+    if fam_doc is None:
+        raise RuntimeError("NewFamilyDocument returned None for " + template)
+    result = {"file": spec["file"], "path": None, "rows": [], "ok": False, "warnings": [], "part_type": ""}
+    try:
+        ctx = Ctx(app, fam_doc, spec)
+        log("== {} ==".format(spec["file"]))
+        run_tx(fam_doc, "Category, Part Type and Parameters", lambda: step_category_part_type_params(ctx))
+        run_tx(fam_doc, "Reference planes and labelled dimensions", lambda: step_planes_and_dimensions(ctx))
+        run_tx(fam_doc, "Trunking geometry", lambda: step_geometry(ctx))
+        run_tx(fam_doc, "Connectors and centre lines", lambda: step_connectors_and_centerlines(ctx))
+
+        all_ok = True
+        for (w, h) in STD_SIZES + EXTRA_SIZES:
+            row, ok = validate_size(ctx, float(w), float(h))
+            result["rows"].append(row)
+            all_ok = all_ok and ok
+            log("   flex {}x{} -> {}".format(w, h, row[-1]))
+        # back to the default 100 x 100
+        flex_to(ctx, DEFAULT_W, DEFAULT_H)
+        if ctx.mgr.Types.Size != 1:
+            raise AssertionError("family must contain exactly 1 type, found {}".format(ctx.mgr.Types.Size))
+        path = os.path.join(folder, spec["file"])
+        opt = SaveAsOptions()
+        opt.OverwriteExistingFile = True
+        fam_doc.SaveAs(path, opt)
+        result.update({"path": path, "ok": all_ok, "warnings": list(ctx.warnings), "part_type": ctx.part_type_used})
+    finally:
+        fam_doc.Close(False)
+    return result
+
+
+# ----------------------------------------------------------------------------------------
+# 12. LOAD INTO THE ACTIVE PROJECT
+# ----------------------------------------------------------------------------------------
+try:
+    class _LoadOptions(IFamilyLoadOptions):
+        # common pyRevit pattern: always load / overwrite
+        def OnFamilyFound(self, familyInUse, overwriteParameterValues):
+            overwriteParameterValues = True
+            return True
+
+        def OnSharedFamilyFound(self, sharedFamily, familyInUse, source, overwriteParameterValues):
+            source = FamilySource.Family
+            overwriteParameterValues = True
+            return True
+    LOAD_OPTIONS = _LoadOptions
+except Exception:
+    LOAD_OPTIONS = None
+
+
+def load_into_project(doc, paths):
+    if doc is None or doc.IsFamilyDocument:
+        return "No project document is open - nothing loaded."
+    loaded = 0
+    for p in paths:
+        ok = False
+
+        def _load():
+            res = False
+            try:
+                res = doc.LoadFamily(p)
+            except Exception:
+                res = False
+            if not res and LOAD_OPTIONS is not None:
+                try:
+                    out = doc.LoadFamily(p, LOAD_OPTIONS())
+                    res = bool(out[0]) if isinstance(out, tuple) else bool(out)
+                except Exception:
+                    res = False
+            return res
+        try:
+            ok = run_tx(doc, "Load trunking bend family", _load)
+        except Exception as ex:
+            log("load failed for {}: {}".format(p, ex))
+        loaded += 1 if ok else 0
+    return "{} / {} families loaded (or already present).".format(loaded, len(paths))
+
+
+# ----------------------------------------------------------------------------------------
+# 13. MAIN
+# ----------------------------------------------------------------------------------------
+def main():
+    app = HOST_APP.app
+    output = script.get_output()
+
+    # the header comes before any document access: reading the active document
+    # can fail on cloud models (DesktopConnectorInterop) and used to leave no
+    # output at all
+    output.print_md(u"## Trunking 90-degree bends - front opening (2 families)")
+    output.print_md(u"Revit **{0}** build {1}".format(app.VersionNumber, app.VersionBuild))
     env_file = _load_env_file()
     if env_file:
-        output.print_md(u'Settings: `{0}`'.format(env_file))
+        output.print_md(u"Settings: `{0}`".format(env_file))
 
-    output.print_md(u'# Cable Trunking 90\xb0 Bend Family Generator (Front Opening)')
-    output.print_md(u'Revit **{0}** build {1}  |  target {2}  |  pyRevit single-type parametric families'
-                    .format(app.VersionNumber, app.VersionBuild, TARGET_REVIT_VERSION))
-    if app.VersionNumber != TARGET_REVIT_VERSION:
-        logger.warning('Script is written for Revit {0}; running on {1}'.format(TARGET_REVIT_VERSION,
-                                                                                app.VersionNumber))
-
-    # The families are built from the template in new documents, so the project
-    # is only needed to optionally load them. Reading the active document can
-    # itself fail (cloud / Desktop Connector models probe an interop assembly
-    # that is not always present), and it used to fail before anything printed.
-    project_doc = None
+    doc = None
     try:
-        project_doc = revit.doc
+        doc = HOST_APP.doc
     except Exception as ex:
-        output.print_md(u'Active document unavailable: {0}'.format(ex))
+        output.print_md(u"Active document unavailable: {0}".format(ex))
 
     template = find_template(app)
-    output.print_md(u'Template: `{0}`'.format(template))
+    log("template: {}".format(template))
+    folder = _output_folder()
+    output.print_md(u"Template: `{0}`".format(template))
+    output.print_md(u"Output: `{0}`".format(folder))
 
-    out_dir = _output_folder()
-    output.print_md(u'Output: `{0}`'.format(out_dir))
-
-    builders = []
+    results = []
     for spec in FAMILY_SPECS:
-        builder = BendFamilyBuilder(app, template, spec, out_dir)
         try:
-            builder.run()
-        except Exception:
-            builder.error = traceback.format_exc()
-            logger.error(builder.error)
-        builders.append(builder)
+            results.append(build_family(app, template, spec, folder))
+        except Exception as ex:
+            log("FAILED {}: {}".format(spec["file"], ex))
+            log(traceback.format_exc())
+            results.append({"file": spec["file"], "path": None, "ok": False, "warnings": [str(ex)],
+                            "rows": [[spec["label"], "-", "-", "-", "-", "-", "-", "-",
+                                      "ERROR: " + str(ex).split("\n")[0][:110]]], "part_type": ""})
 
-    # ---------------- report ----------------
-    columns = ['Size W x H', 'A exp/act', 'B exp/act', 'H exp/act', 'C exp/act', 'T exp/act',
-               'CenterToEnd exp/act', 'Conn1 origin (mm)', 'Conn2 origin (mm)', 'Types', 'Result']
-    for b in builders:
-        output.print_md(u'## {0}'.format(b.spec['title']))
-        if b.error:
-            output.print_md(u'**FAILED**\n```\n{0}\n```'.format(b.error))
-            continue
-        output.print_table(table_data=b.flex_rows, title='Single-type flexing report: ' + b.spec['file'],
-                           columns=columns)
-        summary = [
-            ['Saved file', b.saved_path],
-            ['Family types', '1 (Standard)'],
-            ['Category (needs Cable Tray Fittings)', b.stats.get('category', '?')],
-            ['Part type (needs Elbow)', b.stats.get('part_type', '?')],
-            ['Connectors (needs 2)', b.stats.get('connectors', 0)],
-            ['Reference planes / dimensions', '{0} / {1}'.format(b.stats['planes'], b.stats['dimensions'])],
-            ['Sketch alignments ok / failed / unmatched', '{0} / {1} / {2}'.format(
-                b.stats['alignments_ok'], b.stats['alignments_failed'], b.stats['unmatched_lines'])],
-            ['Z lock method', b.stats['z_lock']],
-            ['Connector host', b.stats['connector_host']],
-            ['Coarse centre line', b.stats['centerline_lock']],
-            ['Flex result', 'ALL PASS' if b.flex_all_ok else 'CHECK TABLE'],
-            ['Warnings', '\n'.join(b.stats['warnings']) if b.stats['warnings'] else 'none'],
-        ]
-        output.print_table(table_data=summary, title='Build summary', columns=['Item', 'Value'])
+    columns = ["Family", "W x H", "A (mm)", "B (mm)", "C (mm)", "Wall T (mm)", "BBox X x Y x Z (mm)",
+               "CenterToEnd", "Result"]
+    rows = []
+    for r in results:
+        rows.extend(r["rows"])
+    output.print_md("## Trunking 90-degree bends - Front opening : single-type Flexing report")
+    output.print_table(table_data=rows, title="2 families x 11 sizes (9 standard + 300x100, 50x100)",
+                       columns=columns)
+    for r in results:
+        output.print_md("* **{}** -> `{}`  | Part Type: `{}`  | warnings: {}".format(
+            r["file"], r["path"], r.get("part_type", ""), len(r["warnings"])))
+        for w in r["warnings"][:25]:
+            output.print_md("    * " + str(w))
 
-    saved = [b for b in builders if b.saved_path]
-    failed = [b for b in builders if b.error]
-    log_path = os.path.join(out_dir, 'bends-build.log')
     try:
-        # the default codec on a zh-TW machine is cp950 and cannot encode the
-        # family names or 電纜橋架配件, which made the whole log write fail
+        import io
+        log_path = os.path.join(folder, "bends-build.log")
+        # UTF-8: the default codec here is cp950 and cannot encode the names
+        handle = io.open(log_path, "w", encoding="utf-8", errors="replace")
         try:
-            import io
-            handle = io.open(log_path, 'w', encoding='utf-8', errors='replace')
-        except Exception:
-            handle = open(log_path, 'w')
-        try:
-            handle.write(u'Revit {0} build {1}\n'.format(app.VersionNumber, app.VersionBuild))
-            handle.write(u'template: {0}\n'.format(template))
-            handle.write(u'output: {0}\n'.format(out_dir))
-            for b in builders:
-                handle.write(u'\n[{0}]\n'.format(b.spec['file']))
-                if b.error:
-                    handle.write(u'ERROR:\n{0}\n'.format(b.error))
-                    continue
-                for key in ('category', 'part_type', 'connectors', 'connector_detail', 'z_lock',
-                            'connector_host', 'planes', 'dimensions', 'alignments_ok',
-                            'alignments_failed', 'unmatched_lines'):
-                    handle.write(u'{0}: {1}\n'.format(key, b.stats.get(key, '?')))
-                handle.write(u'saved: {0}\n'.format(b.saved_path))
-                handle.write(u'flex_all_ok: {0}\n'.format(b.flex_all_ok))
-                for warning in b.stats.get('warnings') or []:
-                    handle.write(u'warning: {0}\n'.format(warning))
-                for row in b.flex_rows:
-                    handle.write(u' | '.join(u'{0}'.format(cell) for cell in row) + u'\n')
+            for r in results:
+                handle.write(u"{0}\n  path: {1}\n  ok: {2}\n  part_type: {3}\n".format(
+                    r["file"], r["path"], r["ok"], r.get("part_type", "")))
+                for w in r.get("warnings") or []:
+                    handle.write(u"  warning: {0}\n".format(w))
+                for row in r.get("rows") or []:
+                    handle.write(u"  " + u" | ".join(u"{0}".format(c) for c in row) + u"\n")
         finally:
             handle.close()
-        output.print_md(u'Log: `{0}`'.format(log_path))
+        output.print_md(u"Log: `{0}`".format(log_path))
     except Exception as ex:
-        logger.warning('could not write {0}: {1}'.format(log_path, ex))
-    msg = u'已建立 {0} / {1} 個族。\n'.format(len(saved), len(FAMILY_SPECS))
-    for b in saved:
-        msg += u'  - {0}  [{1}]\n'.format(os.path.basename(b.saved_path),
-                                          'flex PASS' if b.flex_all_ok else 'flex CHECK')
-    if failed:
-        msg += u'失敗: ' + ', '.join(b.spec['file'] for b in failed) + u'\n'
+        log(u"could not write bends-build.log: {0}".format(ex))
 
+    saved = [r["path"] for r in results if r["path"]]
+    failed = [r["file"] for r in results if not r["ok"]]
+    summary = (u"已完成 {} / 2 個族。\n{}\n\n是否自動載入目前開啟的 Revit 專案？\n"
+               u"Load the families into the active project now?").format(
+        len(saved), u"全部 Flexing 驗收通過 / all flexing checks passed." if not failed
+        else u"注意：驗收未通過 / checks failed: " + u", ".join(failed))
     if not saved:
-        _alert(msg + u'\n沒有可載入的族，請查看輸出視窗。', title='Trunking bends')
+        _alert(summary)
         return
-
-    if project_doc is None or project_doc.IsFamilyDocument:
-        _alert(msg + u'\n目前沒有開啟的專案文件，請手動載入 .rfa。', title='Trunking bends')
+    if os.environ.get("TRUNKING_LOAD", "1") != "1":
+        _alert(summary + u"\n\n已存檔，未載入專案（TRUNKING_LOAD=0）。")
         return
-
-    if os.environ.get('TRUNKING_LOAD', '1') != '1':
-        _alert(msg + u'\n已存檔，未載入專案（TRUNKING_LOAD=0）。'
-                     u'\n載入後才能在「佈線設定 → 水平彎頭」看到這個族。',
-               title='Trunking bends')
+    if doc is None or doc.IsFamilyDocument:
+        _alert(summary + u"\n\n目前沒有可用的專案文件，請手動載入 .rfa。")
         return
-
-    load_rows = []
-    for b in saved:
-        try:
-            loaded, family, symbols = load_into_project(project_doc, b.saved_path)
-            load_rows.append([os.path.basename(b.saved_path), 'yes' if loaded else 'already loaded / skipped',
-                              str(family.Id.Value) if family is not None else '-', str(symbols)])
-        except Exception as ex:
-            load_rows.append([os.path.basename(b.saved_path), 'ERROR: {0}'.format(ex), '-', '-'])
-    output.print_table(table_data=load_rows, title='Loaded into ' + project_doc.Title,
-                       columns=['Family', 'Loaded', 'Family Id (Int64)', 'Types'])
-    _alert(u'載入完成。請於「電纜架類型 > 佈線首選項 > 水平彎頭」指定此族（唯一類型 Standard）。',
-           title='Done')
+    _alert(summary + u"\n\n" + load_into_project(doc, saved))
 
 
-if __name__ == '__main__':
-    main()
+main()
