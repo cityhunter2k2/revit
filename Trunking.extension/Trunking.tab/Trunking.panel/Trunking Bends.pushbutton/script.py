@@ -441,6 +441,9 @@ DERIVED_LENGTHS = [
     ("Hole_Z_Offset", "Height / 4"),
     ("Screw_Head_Radius", "Screw_Head_Diameter / 2"),
     ("Screw_Top_Z", "Height / 2 + Screw_Head_Height"),
+    # coupling-tab bolts: the head stands proud of the tab face by Screw_Head_Height
+    ("Tab_Bolt_Out", "WallThickness + Screw_Head_Height"),
+    ("Tab_Bolt_In", "-(WallThickness + Screw_Head_Height)"),
 ]
 
 
@@ -562,6 +565,8 @@ def step_category_part_type_params(ctx):
         add_param(ctx, name, GroupTypeId.Visibility, SpecTypeId.Boolean.YesNo, True)
         ctx.mgr.Set(ctx.p[name], 1)
     add_param(ctx, "Show_Cover_Screws", GroupTypeId.Visibility, SpecTypeId.Boolean.YesNo, True)
+    add_param(ctx, "Show_Tab_Screws", GroupTypeId.Visibility, SpecTypeId.Boolean.YesNo, True)
+    ctx.mgr.Set(ctx.p["Show_Tab_Screws"], 1)
     # --- identity ---------------------------------------------------------------------------
     add_param(ctx, "Cover_Type", GroupTypeId.IdentityData, SpecTypeId.String.Text, True)
     ctx.mgr.Set(ctx.p["Cover_Type"], "QT")   # QT centre caption / ST screw fix / CT clip fix
@@ -576,6 +581,7 @@ def step_category_part_type_params(ctx):
     for name, formula in DERIVED_LENGTHS:
         set_formula(ctx, name, formula)
     ctx.mgr.SetFormula(ctx.p["Show_Cover_Screws"], "and(Show_Cover, Show_Fasteners)")
+    ctx.mgr.SetFormula(ctx.p["Show_Tab_Screws"], "and(Show_Flanges, Show_Fasteners)")
 
 
 # ----------------------------------------------------------------------------------------
@@ -1029,6 +1035,15 @@ def build_profile(ctx, name, frame, host, loops, rng, material=None, visible=Non
         except Exception:
             pass
         rng = (ctx.p["Neg_WallThickness"], 0.0) if flip else (0.0, ctx.p["WallThickness"])
+    elif rng == "BOLT":
+        # plate thickness plus the protruding screw head, on the same side as
+        # the plate itself
+        flip = False
+        try:
+            flip = sp.GetPlane().Normal.DotProduct(AXIS_VEC[hp.axis]) < 0
+        except Exception:
+            pass
+        rng = (ctx.p["Tab_Bolt_In"], 0.0) if flip else (0.0, ctx.p["Tab_Bolt_Out"])
     _set_range(ctx, ext, rng[0], rng[1])
     try:
         ext.Name = "TRK_" + name
@@ -1116,6 +1131,14 @@ def step_geometry(ctx):
                      circ(uax + "_hole", "Z_hole_dn", HOLE_D_MM / 2.0, "Hole_Radius")]
             build_profile(ctx, "Tab_{}_{}".format(uax, host), frame, host, [rect] + holes, "THICK",
                           "Body_Material", "Show_Flanges", LOD_FINE)
+
+    # 5b) coupling tab bolts: a head on each tab hole - Show_Flanges AND Show_Fasteners
+    for frame, uax, hosts in (("XZ", "X", ("Y_out", "Y_in_T")), ("YZ", "Y", ("X_out", "X_in_T"))):
+        for host in hosts:
+            bolts = [circ(uax + "_hole", "Z_hole_up", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
+                     circ(uax + "_hole", "Z_hole_dn", SCREW_D_MM / 2.0, "Screw_Head_Radius")]
+            build_profile(ctx, "TabBolt_{}_{}".format(uax, host), frame, host, bolts, "BOLT",
+                          "Screw_Material", "Show_Tab_Screws", LOD_FINE)
 
     # 6) cover fixing screws : 2 per port, on the +Z face of the cover - Show_Cover AND Show_Fasteners
     screws = [circ("X_scr_end", "Y_scr_pos", SCREW_D_MM / 2.0, "Screw_Head_Radius"),
@@ -1278,7 +1301,10 @@ def validate_size(ctx, w, h):
     chk("T", t, exp_t, 0.001)
     chk("CenterToEnd", ce, w / 2.0 + STUB_MM)
     for i, ax in enumerate("XYZ"):
-        chk("min" + ax, mn[i], exp_min[i])
+        # a coupling-tab bolt head may stand proud of the nominal envelope
+        proud = t + SCREW_H_MM
+        if not (exp_min[i] - proud - TOL_MM <= mn[i] <= exp_min[i] + TOL_MM):
+            errs.append("min{} {:.2f} != {:.2f}".format(ax, mn[i], exp_min[i]))
         chk("max" + ax, mx[i], exp_max[i])
     cs = connector_state(ctx)
     if len(cs) != 2:
