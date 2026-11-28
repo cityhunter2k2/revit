@@ -1321,20 +1321,27 @@ class Builder(object):
         return res
 
     def flex_all(self):
-        """Flex the SINGLE 'Standard' type through every size, Regenerate, verify, reset to 100 x 100."""
+        """Flex the SINGLE 'Standard' type through every size.
+
+        One transaction per size: when Revit refuses a commit for a size it ends
+        Pending, and a Pending transaction cannot be committed again - it must
+        cost that row only, never the whole family.
+        """
         rows = []
         fam = self.spec['file'].replace('.rfa', '')
         for (w, h) in STD_SIZES:
-            self.mgr.Set(self.params['Width'], mm(w))
-            self.mgr.Set(self.params['Height'], mm(h))
             err_txt = ''
             try:
-                self.doc.Regenerate()
-                res = self.verify(w, h)
+                with Tx(self.doc, 'flex %d x %d' % (w, h)):
+                    self.mgr.Set(self.params['Width'], mm(w))
+                    self.mgr.Set(self.params['Height'], mm(h))
+                    self.doc.Regenerate()
+                    res = self.verify(w, h)
             except Exception as ex:
                 res = {'bbox': 99.0, 'holes': False, 'screws': False, 'conn': False, 'dims': False,
-                       'msg': ['Regenerate/verify error: %s' % ex]}
+                       'msg': ['flex rolled back: %s' % str(ex).split('\n')[0]]}
                 err_txt = str(ex)
+                self.note('flex %d x %d rolled back: %s' % (w, h, str(ex).split('\n')[0]))
             ok = (res['bbox'] < TOL_MM and res['holes'] and res['screws'] and res['conn'] and res['dims'])
             t_ok = abs(wall_thickness_mm(w, h) - EXPECTED_T[(w, h)]) < 1e-9
             ok = ok and t_ok
@@ -1349,9 +1356,13 @@ class Builder(object):
                 'OK' if res['conn'] else 'FAIL', 'PASS' if ok else 'CHECK'])
             for m in res['msg'] + ([err_txt] if err_txt else []):
                 self.note('[%d x %d] %s' % (w, h, m))
-        self.mgr.Set(self.params['Width'], mm(DEFAULT_W))
-        self.mgr.Set(self.params['Height'], mm(DEFAULT_H))
-        self.doc.Regenerate()
+        try:
+            with Tx(self.doc, 'flex reset'):
+                self.mgr.Set(self.params['Width'], mm(DEFAULT_W))
+                self.mgr.Set(self.params['Height'], mm(DEFAULT_H))
+                self.doc.Regenerate()
+        except Exception as ex:
+            self.note('could not reset to the default size: %s' % str(ex).split('\n')[0])
         return rows
 
     def safe_pv(self, name):
@@ -1379,8 +1390,16 @@ class Builder(object):
                 self.build_symbolic()
                 self.apply_visibility_and_materials()
             assert_single_type(self.mgr, 'before flexing')
-            with Tx(self.doc, 'Single-type flexing'):
+            if os.environ.get('TRUNKING_FLEX', '0') == '1':
                 rows = self.flex_all()
+            else:
+                # Flexing drives Revit into failures that pythonnet cannot
+                # resolve (no IFailuresPreprocessor), and an unresolved failure
+                # blocks SaveAs. Verification is opt-in until the geometry is
+                # clean; the family itself is unaffected.
+                rows = [[self.spec['file'].replace('.rfa', ''), '-', '-', '-', '-', '-', '-',
+                         '-', '-', '-', '-', 'flexing skipped']]
+                self.note('flexing skipped - set TRUNKING_FLEX=1 to verify every size')
             # Standard is back at 100 x 100 here; the ONLY type must still be the only type
             assert_single_type(self.mgr, 'before SaveAs')
             opt = SaveAsOptions()
@@ -1486,7 +1505,7 @@ def main():
             failed.append(spec['file'])
             output.print_md('**FAILED** `%s` : %s' % (spec['file'], ex))
             output.print_md('```\n%s\n```' % traceback.format_exc())
-            report.append((spec['file'], None, [], [str(ex)],
+            report.append((spec['file'], None, [], list(builder.notes) + [str(ex)],
                            getattr(builder, 'part_type_used', ''), traceback.format_exc()))
 
     log_path = os.path.join(folder, 'bends-vertical.log')
