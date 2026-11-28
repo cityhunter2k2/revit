@@ -1103,12 +1103,13 @@ def add_cross_recesses(ctx, centres):
     try:
         top = ctx.val_mm("Screw_Top_Z")
         dia = ctx.val_mm("Screw_Head_Diameter")
-        depth = ctx.val_mm("Screw_Head_Height") * 0.35
+        depth = ctx.val_mm("Screw_Head_Height") * 0.5
     except Exception as ex:
         ctx.warn("cross recess skipped: {}".format(ex))
         return
-    long_r = dia * 0.30
-    wide_r = dia * 0.07
+    long_r = dia * 0.35
+    wide_r = dia * 0.09
+    made = 0
     sp = SketchPlane.Create(ctx.doc, Plane.CreateByNormalAndOrigin(XYZ(0, 0, -1), XYZ(0, 0, mm(top))))
     for (xk, yk) in centres:
         cx = ctx.pl[xk].ft
@@ -1125,9 +1126,11 @@ def add_cross_recesses(ctx, centres):
             profile.Append(loop)
             try:
                 ctx.fc.NewExtrusion(False, profile, sp, mm(depth))
+                made += 1
             except Exception as ex:
                 ctx.warn("cross recess failed: {}".format(str(ex).split("\n")[0]))
                 return
+    log("   cover screw cross recesses: {}".format(made))
     ctx.doc.Regenerate()
 
 
@@ -1142,12 +1145,13 @@ def add_tab_bolt_crosses(ctx):
         thick = ctx.val_mm("WallThickness")
         head = ctx.val_mm("Screw_Head_Height")
         dia = ctx.val_mm("Screw_Head_Diameter")
-        depth = head * 0.35
+        depth = head * 0.5
     except Exception as ex:
         ctx.warn("tab bolt cross skipped: {}".format(ex))
         return
-    long_r = dia * 0.30
-    wide_r = dia * 0.07
+    long_r = dia * 0.35
+    wide_r = dia * 0.09
+    made = 0
     for frame, uax, hosts in (("XZ", "X", ("Y_out", "Y_in_T")), ("YZ", "Y", ("X_out", "X_in_T"))):
         for host in hosts:
             hp = ctx.pl[host]
@@ -1183,9 +1187,11 @@ def add_tab_bolt_crosses(ctx):
                     profile.Append(loop)
                     try:
                         ctx.fc.NewExtrusion(False, profile, sp, mm(depth))
+                        made += 1
                     except Exception as ex:
                         ctx.warn("tab bolt cross failed: {}".format(str(ex).split("\n")[0]))
                         return
+    log("   tab bolt cross recesses: {}".format(made))
     ctx.doc.Regenerate()
 
 
