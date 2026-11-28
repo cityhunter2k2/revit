@@ -1093,6 +1093,44 @@ def outline_keys(mitre):
             ("X_in", "Y_end"), ("X_out", "Y_end")]
 
 
+def add_cross_recesses(ctx, centres):
+    """Phillips slot on each cover screw head: two thin voids cut downwards.
+
+    Voids are invisible themselves, so the slot shows only as a notch in the
+    head it crosses. The plane sits on the head's outer face and the extrusion
+    runs into the head.
+    """
+    try:
+        top = ctx.val_mm("Screw_Top_Z")
+        dia = ctx.val_mm("Screw_Head_Diameter")
+        depth = ctx.val_mm("Screw_Head_Height") * 0.35
+    except Exception as ex:
+        ctx.warn("cross recess skipped: {}".format(ex))
+        return
+    long_r = dia * 0.30
+    wide_r = dia * 0.07
+    sp = SketchPlane.Create(ctx.doc, Plane.CreateByNormalAndOrigin(XYZ(0, 0, -1), XYZ(0, 0, mm(top))))
+    for (xk, yk) in centres:
+        cx = ctx.pl[xk].ft
+        cy = ctx.pl[yk].ft
+        for along_x in (True, False):
+            a = long_r if along_x else wide_r
+            b = wide_r if along_x else long_r
+            pts = [XYZ(cx - mm(a), cy - mm(b), mm(top)), XYZ(cx + mm(a), cy - mm(b), mm(top)),
+                   XYZ(cx + mm(a), cy + mm(b), mm(top)), XYZ(cx - mm(a), cy + mm(b), mm(top))]
+            loop = CurveArray()
+            for i in range(4):
+                loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % 4]))
+            profile = CurveArrArray()
+            profile.Append(loop)
+            try:
+                ctx.fc.NewExtrusion(False, profile, sp, mm(depth))
+            except Exception as ex:
+                ctx.warn("cross recess failed: {}".format(str(ex).split("\n")[0]))
+                return
+    ctx.doc.Regenerate()
+
+
 def step_geometry(ctx):
     P = ctx.p
     mitre = ctx.mitre
@@ -1147,6 +1185,8 @@ def step_geometry(ctx):
               circ("X_scr_neg", "Y_scr_end", SCREW_D_MM / 2.0, "Screw_Head_Radius")]
     build_profile(ctx, "CoverScrews", "XY", None, screws, (P["Half_Height"], P["Screw_Top_Z"]),
                   "Screw_Material", "Show_Cover_Screws", LOD_FINE)
+    add_cross_recesses(ctx, [("X_scr_end", "Y_scr_pos"), ("X_scr_end", "Y_scr_neg"),
+                             ("X_scr_pos", "Y_scr_end"), ("X_scr_neg", "Y_scr_end")])
 
 
 # ----------------------------------------------------------------------------------------
