@@ -1396,8 +1396,19 @@ def validate_size(ctx, w, h):
         if got is None or abs(got - exp) > tol:
             errs.append("{} {} != {}".format(label, "n/a" if got is None else "{:.2f}".format(got),
                                               "{:.2f}".format(exp)))
-    chk("A", a_meas, exp_a)
-    chk("B", b_meas, exp_a)
+    # a coupling-ear bolt head stands proud of the tray envelope by its own
+    # thickness plus the head height, so A and B may exceed the nominal size
+    # by exactly that much and not more
+    proud = exp_t + SCREW_H_MM
+
+    def chk_proud(label, got, exp):
+        if got is None or not (exp - TOL_MM <= got <= exp + proud + TOL_MM):
+            errs.append("{} {} != {} (+{:.1f} for the ear bolts)".format(
+                label, "n/a" if got is None else "{:.2f}".format(got),
+                "{:.2f}".format(exp), proud))
+
+    chk_proud("A", a_meas, exp_a)
+    chk_proud("B", b_meas, exp_a)
     chk("C", c_meas, exp_c)
     chk("T", t, exp_t, 0.001)
     chk("CenterToEnd", ce, w / 2.0 + STUB_MM)
