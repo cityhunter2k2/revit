@@ -53,6 +53,45 @@ from pyrevit import script, HOST_APP
 # module raises too. Nothing here may use it.
 
 
+def _routing_table(doc):
+    """Every Cable Tray Fitting family in the project with its part type.
+
+    Routing Preferences lists a family only when its category and part type
+    match, so this table shows side by side what Revit sees for ours and for the
+    families that do appear in the list.
+    """
+    rows = []
+    if doc is None or doc.IsFamilyDocument:
+        return rows
+    try:
+        cat = Category.GetCategory(doc, BuiltInCategory.OST_CableTrayFitting)
+    except Exception:
+        return rows
+    if cat is None:
+        return rows
+    for fam in FilteredElementCollector(doc).OfClass(Family):
+        try:
+            if fam.FamilyCategory is None or fam.FamilyCategory.Id.Value != cat.Id.Value:
+                continue
+        except Exception:
+            continue
+        label, value = "?", "?"
+        try:
+            prm = fam.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE)
+            if prm is not None:
+                value = str(prm.AsInteger())
+                label = prm.AsValueString() or "?"
+        except Exception as ex:
+            label = "error: {0}".format(ex)
+        types = 0
+        try:
+            types = len(list(fam.GetFamilySymbolIds()))
+        except Exception:
+            pass
+        rows.append([fam.Name, label, value, str(types)])
+    return rows
+
+
 def _alert(message, title=u"Trunking Bend RFA"):
     """Report through the output window and the log instead of a dialog."""
     try:
@@ -862,21 +901,27 @@ def circ(ukey, vkey, r_mm, rparam):
 
 
 def set_visibility(elem, lod, view_specific=False):
-    try:
-        fev = FamilyElementVisibility(FamilyElementVisibilityType.ViewSpecific if view_specific
-                                      else FamilyElementVisibilityType.Model)
-        fev.IsShownInCoarse = lod[0]
-        fev.IsShownInMedium = lod[1]
-        fev.IsShownInFine = lod[2]
-        # the axis flags are unset on a fresh FamilyElementVisibility, so the
-        # solid would not be drawn in plan or elevation views of the project
-        fev.IsShownInTopBottom = True
-        fev.IsShownInFrontBack = True
-        fev.IsShownInLeftRight = True
-        elem.SetVisibility(fev)
-        return True
-    except Exception:
-        return False
+    # Symbolic curves refuse a ViewSpecific visibility object; solids refuse
+    # nothing here. Try the preferred kind first, then the other one.
+    kinds = (FamilyElementVisibilityType.ViewSpecific, FamilyElementVisibilityType.Model)
+    if not view_specific:
+        kinds = (FamilyElementVisibilityType.Model, FamilyElementVisibilityType.ViewSpecific)
+    for kind in kinds:
+        try:
+            fev = FamilyElementVisibility(kind)
+            fev.IsShownInCoarse = lod[0]
+            fev.IsShownInMedium = lod[1]
+            fev.IsShownInFine = lod[2]
+            # the axis flags are unset on a fresh FamilyElementVisibility, so the
+            # element would not be drawn in plan or elevation views
+            fev.IsShownInTopBottom = True
+            fev.IsShownInFrontBack = True
+            fev.IsShownInLeftRight = True
+            elem.SetVisibility(fev)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _set_range(ctx, ext, start, end):
@@ -1412,6 +1457,24 @@ def main():
         _alert(summary + u"\n\n目前沒有可用的專案文件，請手動載入 .rfa。")
         return
     _alert(summary + u"\n\n" + load_into_project(doc, saved))
+
+    rows = _routing_table(doc)
+    if rows:
+        columns = ["Family", "Part type", "Value", "Types"]
+        output.print_table(table_data=rows,
+                           title="Cable tray fitting families in the project (what Routing Preferences sees)",
+                           columns=columns)
+        try:
+            import io
+            handle = io.open(log_path, "a", encoding="utf-8", errors="replace")
+            try:
+                handle.write(u"\n[project fittings]\n")
+                for row in rows:
+                    handle.write(u"  " + u" | ".join(u"{0}".format(cell) for cell in row) + u"\n")
+            finally:
+                handle.close()
+        except Exception:
+            pass
 
 
 main()
