@@ -697,7 +697,14 @@ class BendFamilyBuilder(object):
         return self._register_plane(name, rp, XYZ.BasisZ, XYZ(0.0, 0.0, z))
 
     def _dim(self, name_a, name_b, axis, offset_mm, label):
-        """Labelled linear dimension between two parallel reference planes."""
+        """Labelled linear dimension between two parallel reference planes.
+
+        A reference taken from a plane created in the same transaction is not
+        usable until the document has regenerated ("The references are not
+        geometric references"), and the view matters too, so this regenerates,
+        retries in the active view, and records a warning instead of aborting
+        the whole family on one bad dimension.
+        """
         rp_a, rp_b = self.planes[name_a], self.planes[name_b]
         oa = self.plane_specs[name_a][1]
         ob = self.plane_specs[name_b][1]
@@ -716,13 +723,35 @@ class BendFamilyBuilder(object):
         else:   # 'diag' : line through both plane origins (direction (1,1,0))
             view = self.plan_view
             pa, pb = oa, ob
-        refs = ReferenceArray()
-        refs.Append(rp_a.GetReference())
-        refs.Append(rp_b.GetReference())
-        dim = self.factory.NewDimension(view, Line.CreateBound(pa, pb), refs)
-        dim.FamilyLabel = self.params[label]
-        self.stats['dimensions'] += 1
-        return dim
+
+        views = [view]
+        try:
+            active = self.doc.ActiveView
+            if active is not None and active.Id.Value != view.Id.Value:
+                views.append(active)
+        except Exception:
+            pass
+
+        line = Line.CreateBound(pa, pb)
+        last_error = None
+        for candidate in views:
+            for _attempt in (1, 2):
+                try:
+                    self.doc.Regenerate()
+                except Exception:
+                    pass
+                try:
+                    refs = ReferenceArray()
+                    refs.Append(rp_a.GetReference())
+                    refs.Append(rp_b.GetReference())
+                    dim = self.factory.NewDimension(candidate, line, refs)
+                    dim.FamilyLabel = self.params[label]
+                    self.stats['dimensions'] += 1
+                    return dim
+                except Exception as ex:
+                    last_error = ex
+        self._warn('Dimension {0} -> {1} ({2}) skipped: {3}'.format(name_a, name_b, label, last_error))
+        return None
 
     def _datums(self):
         W, H, T, S, FL = self.W, self.H, self.T, self.STUB, self.FL
