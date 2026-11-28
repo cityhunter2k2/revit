@@ -1119,6 +1119,32 @@ class Builder(object):
         self.label_diameter(ext, center, 'Screw_Diameter', self.views_all())
         return ext
 
+    def dump_layout(self):
+        """TRUNKING_DEBUG=1: write every plane coordinate and every form box.
+
+        The verification only says where a feature ended up; this says which
+        reference plane each feature is actually tied to.
+        """
+        lay = self.layout
+        self.note('--- planes (%d) ---' % len(lay.planes))
+        for key in lay.planes:
+            pdef = lay.planes[key]
+            self.note('plane %-14s n=(%d,%d,%d) d=%8.2f label=%s'
+                      % (key, pdef.n[0], pdef.n[1], pdef.n[2], pdef.d, pdef.label))
+        self.note('--- forms (%d) ---' % len(lay.forms))
+        for fd in lay.forms:
+            if fd.role == 'screw':
+                self.note('screw  centre=%s surf=%s top=%s xkey=%s ykey=%s'
+                          % (fd.circle['center'], fd.circle['surf'], fd.circle['top'],
+                             fd.circle['xkey'], fd.circle['ykey']))
+            else:
+                self.note('%-6s edges=%s ykeys=%s holes=%s'
+                          % (fd.role, fd.edges, fd.ykeys, fd.holes))
+        self.note('--- connectors ---')
+        for cspec in lay.connectors:
+            self.note('connector port=%s plane=%s origin=%s normal=%s'
+                      % (cspec['port'], cspec['plane'], cspec['origin'], cspec['normal']))
+
     def build_forms(self):
         for fd in self.layout.forms:
             if fd.role == 'screw':
@@ -1159,6 +1185,25 @@ class Builder(object):
             ElementTransformUtils.RotateElement(self.doc, conn.Id, axis, math.pi / 2.0)
             self.doc.Regenerate()
         self.bind_connector(conn)
+        # The connector is hosted on a face of the gauge plate, and that face is
+        # not always on the port plane: the origin then follows H with the wrong
+        # slope (it matched only at H = 100). The specification already carries
+        # the exact port origin, so the connector is moved onto it.
+        target = cspec.get('origin')
+        if target is not None:
+            try:
+                origin = conn.Origin
+                delta = (mm(target[0]) - origin.X,
+                         mm(target[1]) - origin.Y,
+                         mm(target[2]) - origin.Z)
+                if max(abs(d) for d in delta) > 1e-9:
+                    ElementTransformUtils.MoveElement(self.doc, conn.Id, XYZ(*delta))
+                    self.doc.Regenerate()
+                    self.note('connector %d moved by (%.1f, %.1f, %.1f) mm onto the port plane'
+                              % (cspec['port'], to_mm(delta[0]), to_mm(delta[1]), to_mm(delta[2])))
+            except Exception as ex:
+                self.note('connector %d could not be moved onto the port plane: %s'
+                          % (cspec['port'], str(ex).split('\n')[0]))
         return conn
 
     def build_connectors(self):
@@ -1423,6 +1468,8 @@ class Builder(object):
                 self.setup_parameters()
             assert_single_type(self.mgr, 'after parameters')
             self.discover_views()
+            if os.environ.get('TRUNKING_DEBUG') == '1':
+                self.dump_layout()
             with Tx(self.doc, 'Parametric geometry'):
                 self.build_planes()
                 self.build_forms()
